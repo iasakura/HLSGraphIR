@@ -31,7 +31,8 @@ pub enum BinOp {
     And,
     Or,
 
-    Mu
+    Mu,
+    Ita
 }
 
 #[derive(Debug)]
@@ -59,6 +60,10 @@ pub fn mu(a1 : Arg, a2 : Arg) -> Expr {
     Expr::BinExp(BinOp::Mu, a1, a2)
 }
 
+pub fn ita(a1 : Arg, a2 : Arg) -> Expr {
+    Expr::BinExp(BinOp::Ita, a1, a2)
+}
+
 pub fn plus(a1 : Arg, a2 : Arg) -> Expr {
     Expr::BinExp(BinOp::Plus, a1, a2)
 }
@@ -81,6 +86,22 @@ pub fn mod_(a1 : Arg, a2 : Arg) -> Expr {
 
 pub fn eq(a1 : Arg, a2 : Arg) -> Expr {
     Expr::BinExp(BinOp::Eq, a1, a2)
+}
+
+pub fn lt(a1 : Arg, a2 : Arg) -> Expr {
+    Expr::BinExp(BinOp::LT, a1, a2)
+}
+
+pub fn le(a1 : Arg, a2 : Arg) -> Expr {
+    Expr::BinExp(BinOp::LE, a1, a2)
+}
+
+pub fn gt(a1 : Arg, a2 : Arg) -> Expr {
+    Expr::BinExp(BinOp::GT, a1, a2)
+}
+
+pub fn ge(a1 : Arg, a2 : Arg) -> Expr {
+    Expr::BinExp(BinOp::GE, a1, a2)
 }
 
 pub fn select(a1 : Arg, a2 : Arg, a3: Arg) -> Expr {
