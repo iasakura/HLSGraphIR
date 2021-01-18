@@ -1,3 +1,7 @@
+```
+collatz(n) = 
+```
+
 ```python
 def collatz(n):
     cur = n
@@ -29,5 +33,8 @@ loop collatz(n)
         cur2 := select(tmp5, tmp1, tmp3)
         step2 := step1 + 1
     }
-    ret step2
+    exit {
+        step := ita(step0, step2)
+    }
+    returns (step)
 ```

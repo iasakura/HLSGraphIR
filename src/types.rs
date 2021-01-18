@@ -1,7 +1,19 @@
+use std::collections::HashMap;
+
 #[derive(Debug)]
 pub struct Var {
     pub name: String
 }
+
+pub fn var_from_str(s: &str) -> Var {
+    Var {name : String::from(s)}
+}
+
+pub fn var_from_string(s: String) -> Var {
+    Var {name : s}
+}
+
+pub type Label = String;
 
 #[derive(Debug)]
 pub enum Arg {
@@ -115,13 +127,46 @@ pub struct Stmt {
 }
 
 #[derive(Debug)]
+pub enum ExitOp {
+    JC(Var, Label, Label),
+    JMP(Label),
+    RET
+}
+
+pub fn jc(cond: Var, label1: Label, label2: Label) -> ExitOp {
+    ExitOp::JC(cond, label1, label2)
+}
+
+pub fn jmp(label: Label) -> ExitOp {
+    ExitOp::JMP(label)
+}
+
+pub fn ret() -> ExitOp {
+    ExitOp::RET
+}
+
+#[derive(Debug)]
+pub enum BBBody {
+    SeqBB (Vec<Stmt>),
+    PipeBB (Vec<Stmt>, Var)
+}
+
+#[derive(Debug)]
+pub struct BB {
+    pub prevs: Vec<Label>, 
+    pub body: BBBody,
+    pub exit: ExitOp
+}
+
+pub type CFG = HashMap<Label, BB>;
+
+#[derive(Debug)]
 pub struct LoopIR {
     pub name: String,
+    pub start: Label,
     pub params: Vec<Var>,
-    pub cond: Expr,
-    pub init_body: Vec<Stmt>,
-    pub while_body: Vec<Stmt>,
-    pub exit_body: Vec<Stmt>,
+    pub cfg: CFG,
+    pub returns: Vec<Var>,
 }
 
 // WIP
