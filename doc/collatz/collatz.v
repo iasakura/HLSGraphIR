@@ -59,9 +59,6 @@ module collatz(
                     st_exit_fin <= 1'b0;
                 end
                 // FINALIZATION
-            end else begin
-                $display("unreachable");
-                $finish;
             end
         end
     end
@@ -69,7 +66,7 @@ module collatz(
     assign st_init_en = cur_state == ST_INIT;
     assign st_loop_en = cur_state == ST_LOOP;
     assign st_exit_en = cur_state == ST_EXIT;
-    assign finish     = cur_state == ST_FIN;
+    assign st_fin_en     = cur_state == ST_FIN;
 
     reg [31:0] reg_cur0;
     reg [31:0] reg_step0;
@@ -203,6 +200,16 @@ module collatz(
                 // finish
                 st_exit_fin <= 1;
             end
+        end
+    end
+
+    //
+    // FINISH
+    //
+    always @(posedge clk) begin
+        if (st_fin_en) begin
+            finish <= 1'b1;
+            ret0 <= reg_step;
         end
     end
 
