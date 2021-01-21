@@ -1,3 +1,4 @@
+use std::fmt;
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -161,7 +162,7 @@ pub struct BB {
 pub type CFG = HashMap<Label, BB>;
 
 #[derive(Debug)]
-pub struct LoopIR {
+pub struct GatedSSAIR {
     pub name: String,
     pub start: Label,
     pub params: Vec<Var>,
@@ -169,23 +170,53 @@ pub struct LoopIR {
     pub returns: Vec<Var>,
 }
 
-// WIP
+// Only dataflow dependency is currently supported.
+// TODO: other types of dependency should be supported
+// e.g., Anti/Output, May/Must/...
 #[derive(Debug)]
-pub struct DFG {}
-
-#[derive(Debug)]
-pub struct LoopDFG {
-    name: String,
-    params: Vec<Var>,
-    cond: Expr,
-    body: DFG,
+pub enum DepType {
+    Independent,
+    Carried(i32)
 }
 
 #[derive(Debug)]
-pub struct LoopSched {
-    name: String,
-    params: Vec<Var>,
-    cond: (Expr, Expr),
-    ii: i32,
-    body: Vec<Vec<Stmt>>
+pub struct Edge {
+    pub other: Var,
+    pub dep_type: DepType,
 }
+
+#[derive(Debug)]
+pub struct DFGNode<SCHED> {
+    pub stmt: Stmt,
+    pub prevs: Vec<Edge>,
+    pub succs: Vec<Edge>,
+    pub sched: SCHED,
+}
+
+#[derive(Debug)]
+pub enum DFGBB<SCHED, II> {
+    Seq(DFGNode<SCHED>),
+    Pipe(DFGNode<SCHED>, Var, II)
+}
+
+pub type DFG<SCHED, II> = HashMap<Var, DFGBB<SCHED, II>>;
+
+pub type CDFG<SCHED, II> = HashMap<Label, DFG<SCHED, II>>;
+
+// T is the additional info for DFG, U is the additional info for 
+#[derive(Debug)]
+pub struct GenCDFGIR<SCHED: fmt::Debug, II: fmt::Debug> {
+    pub name: String,
+    pub start: Label,
+    pub params: Vec<Var>,
+    pub dfg: CDFG<SCHED, II>,
+    pub returns: Vec<Var>
+}
+
+#[derive(Debug)]
+pub struct Sched {
+    pub sched: i32,
+}
+
+pub type CDFGIR = GenCDFGIR<(), ()>;
+pub type SchedCDFGIR = GenCDFGIR<Sched, i32>;

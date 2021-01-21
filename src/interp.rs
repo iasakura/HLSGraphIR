@@ -140,7 +140,7 @@ fn interp_bb<'a>(bb: &'a BB, prev_label: &Label, env: &mut Env) -> Option<&'a La
     }
 }
 
-pub fn interp_loopir(ir: &LoopIR, args: &Vec<i32>) -> Vec<i32> {
+pub fn interp_loopir(ir: &GatedSSAIR, args: &Vec<i32>) -> Vec<i32> {
     if ir.params.len() != args.len() {
         panic!()
     }

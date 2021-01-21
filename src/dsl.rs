@@ -68,7 +68,7 @@ macro_rules! loop_ir {
             returns ( $( $ret:ident ),* )
         }
     ) => {
-        crate::types::LoopIR {
+        crate::types::GatedSSAIR {
             name: String::from(stringify!($name)),
             start: String::from(stringify!($start_label)),
             params: vec![ $( crate::types::Var { name: String::from(stringify!($param)) } ),* ],
