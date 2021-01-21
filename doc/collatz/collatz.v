@@ -1,3 +1,8 @@
+`define to_int(val) \
+    {{31{1'b0}}, (val)}
+`define to_bool(val) \
+    (val != 0)
+
 module collatz(
     clk, rst_n,
     start, finish,
@@ -7,7 +12,7 @@ module collatz(
     input clk;
     input rst_n;
     input start;
-    output finish;
+    output reg finish;
     input [31:0] n;
     output reg [31:0] ret0;
 
@@ -17,7 +22,7 @@ module collatz(
     parameter ST_FIN  = 2'd3;
 
     reg [1:0] cur_state, prev_state;
-    reg st_init_done, st_lop_done, st_exit_done;
+    reg st_init_done, st_loop_done, st_exit_done;
 
     // state machine for CFG
     always @(posedge clk) begin
@@ -27,9 +32,9 @@ module collatz(
             // INITIALIZATION of ST_INIT
             st_init_cnt <= 0;
         end else begin
-            if (state == ST_INIT) begin
+            if (cur_state == ST_INIT) begin
                 if (st_init_done) begin
-                    if (reg_test0) begin
+                    if (`to_bool(reg_test0)) begin
                         prev_state <= cur_state;
                         cur_state <= ST_LOOP;    
                         // INITIALIZATION of ST_LOOP  
@@ -39,34 +44,36 @@ module collatz(
                         st_loop_while <= 1'b1;
                         st_loop_is_first <= 1'b1;
                     end else begin
-                        pev_state <= cur_state;
-                        state <= ST_EXIT;
+                        prev_state <= cur_state;
+                        cur_state <= ST_EXIT;
                         // INITIALIZATION of ST_EXIT
                     end
                     st_init_done <= 1'b0;
                 end
-            end else if (state == ST_LOOP) begin
+            end else if (cur_state == ST_LOOP) begin
                 if (st_loop_done) begin
                     prev_state <= cur_state;
                     cur_state <= ST_EXIT;
                     st_loop_done <= 1'b0;
                 end
                 // INITIALIZATION of ST_EXIT
-            end else if (state == ST_EXIT) begin
+            end else if (cur_state == ST_EXIT) begin
                 if (st_exit_done) begin
                     prev_state <= cur_state;
                     cur_state <= ST_FIN;
-                    st_exit_fin <= 1'b0;
+                    st_exit_done <= 1'b0;
                 end
                 // FINALIZATION
             end
         end
     end
 
+    wire st_init_en, st_loop_en, st_exit_en, st_fin_en;
+
     assign st_init_en = cur_state == ST_INIT;
     assign st_loop_en = cur_state == ST_LOOP;
     assign st_exit_en = cur_state == ST_EXIT;
-    assign st_fin_en     = cur_state == ST_FIN;
+    assign st_fin_en  = cur_state == ST_FIN;
 
     reg [31:0] reg_cur0;
     reg [31:0] reg_step0;
@@ -78,7 +85,7 @@ module collatz(
     
     assign wire_cur0 = n;
     assign wire_step0 = 32'b0;
-    assign wire_test0 <= n > 32'b1;
+    assign wire_test0 = `to_int(n > 32'b1);
 
     //
     // ST_INIT
@@ -93,8 +100,8 @@ module collatz(
                 reg_cur0 <= wire_cur0;
                 reg_step0 <= wire_step0;
                 reg_test0 <= wire_test0;
-                // finish
-                st_init_fin <= 1;
+                // done
+                st_init_done <= 1;
             end
         end
     end
@@ -135,16 +142,16 @@ module collatz(
     wire wire_while;
 
     assign wire_cur1 = st_loop_stage_is_first ? reg_cur0 : reg_cur2;
-    assign wire_step1 = st_loop_stage_is_first ? reg_step0 : reg_step1;
+    assign wire_step1 = st_loop_stage_is_first ? reg_step0 : reg_step2;
     assign wire_tmp1 = wire_cur1 / 2;
     assign wire_tmp2 = wire_cur1 * 3;
     assign wire_tmp3 = reg_tmp2 + 1;
     assign wire_tmp4 = wire_cur1 % 2;
-    assign wire_tmp5 = reg_tmp4 == 0;
-    assign wire_cur2 = wire_tmp5 ? wire_tmp1 : wire_tmp3;
+    assign wire_tmp5 = `to_int(reg_tmp4 == 32'b0);
+    assign wire_cur2 = `to_bool(wire_tmp5) ? wire_tmp1 : wire_tmp3;
     assign wire_step2 = wire_step1 + 1;
-    assign wire_test1 = wire_cur1 > 1;
-    assign wire_while = test1;
+    assign wire_test1 = `to_int(wire_cur1 > 32'b1);
+    assign wire_while = `to_bool(wire_test1);
 
     always @(posedge clk) begin
         if (st_loop_en) begin
@@ -177,7 +184,7 @@ module collatz(
                     st_loop_is_first <= 1'b0;
                 end
                 st_loop_stage_is_first[0] <= st_loop_is_first;
-                st_loop_stage_is_first[1] <= st_loop_is_first[0];
+                st_loop_stage_is_first[1] <= st_loop_stage_is_first[0];
             end
         end
     end
@@ -197,8 +204,8 @@ module collatz(
             if (st_exit_cnt == 1'b0) begin
                 // compute
                 reg_step <= wire_step;
-                // finish
-                st_exit_fin <= 1;
+                // done
+                st_exit_done <= 1;
             end
         end
     end
