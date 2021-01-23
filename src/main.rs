@@ -1,7 +1,9 @@
 #[macro_use]
-mod dsl;
-mod types;
-mod interp;
+extern crate hls_graph_ir;
+
+use hls_graph_ir::dsl;
+use hls_graph_ir::types;
+use hls_graph_ir::interp;
 
 fn main() {
     let ir = loop_ir!{

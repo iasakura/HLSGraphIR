@@ -27,6 +27,12 @@ pub enum UnOp {
     Neg,
 }
 
+impl fmt::Display for UnOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "-")
+    }
+}
+
 #[derive(Debug)]
 pub enum BinOp {
     Plus,
@@ -46,6 +52,30 @@ pub enum BinOp {
 
     Mu,
     Ita
+}
+
+impl fmt::Display for BinOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BinOp::Plus => write!(f, "+"),
+            BinOp::Minus => write!(f, "-"),
+            BinOp::Mult => write!(f, "*"),
+            BinOp::Div => write!(f, "/"),
+            BinOp::Mod => write!(f, "%"),
+
+            BinOp::Eq => write!(f, "=="),
+            BinOp::LT => write!(f, "<"),
+            BinOp::GT => write!(f, ">"),
+            BinOp::LE => write!(f, "<="),
+            BinOp::GE => write!(f, ">="),
+
+            BinOp::And => write!(f, "&&"),
+            BinOp::Or => write!(f, "||"),
+
+            BinOp::Mu => write!(f, "MU"),
+            BinOp::Ita => write!(f, "Ita")
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -220,3 +250,84 @@ pub struct Sched {
 
 pub type CDFGIR = GenCDFGIR<(), ()>;
 pub type SchedCDFGIR = GenCDFGIR<Sched, i32>;
+
+#[derive(Debug)]
+pub struct VVar {
+    pub name: String,
+    pub bits: i32,
+    pub idx: Option<i32>,
+}
+
+impl fmt::Display for VVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name)?;
+        match self.idx {
+            None => Ok(()),
+            Some(n) => write!(f, "[{}]", n)
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum VExpr {
+    UnExp(UnOp, Box<VExpr>),
+    BinExp(BinOp, Box<VExpr>, Box<VExpr>),
+    TerExp(TerOp, Box<VExpr>, Box<VExpr>, Box<VExpr>),
+    Const(i32),
+    Var(VVar)
+}
+
+impl fmt::Display for VExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            VExpr::UnExp(op, e) => {
+                match op {
+                    UnOp::Neg => write!(f, "-({})", e)
+                }
+            },
+            VExpr::BinExp(op, e1, e2) => {
+                match op {
+                    BinOp::Mu => panic!("Mu is not supported in VerilogIR"),
+                    BinOp::Ita => panic!("Ita is not supported in VerilogIR"),
+                    _ => write!(f, "({} {} {})", e1, op, e2)
+                }
+            },
+            VExpr::TerExp(op, e1, e2, e3) => {
+                match op {
+                    TerOp::Select => write!(f, "({} ? {} : {})", e1, e2, e3)
+                }
+            },
+            VExpr::Const(n) => write!(f, "{}", n),
+            VExpr::Var(v) => write!(f, "{}", v)
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct VAssign {
+    pub lhs: VVar,
+    pub rhs: VExpr
+}
+
+#[derive(Debug)]
+pub enum IOType {
+    Input, OutputReg,
+}
+
+impl fmt::Display for IOType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            IOType::Input => write!(f, "input"),
+            IOType::OutputReg => write!(f, "output reg")
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct VerilogIR {
+    pub name: String,
+    pub io_params: Vec<(VVar, IOType)>,
+    pub regs: Vec<VVar>,
+    pub wires: Vec<VAssign>,
+    pub always: Vec<(VVar, VExpr, Vec<VAssign>)>,
+}
