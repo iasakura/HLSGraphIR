@@ -87,14 +87,14 @@ pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
         for w in &ir.wires {
             genln!("assign {} = {}", w.lhs, w.rhs);
         }
-        for (clk, cond, assigns) in &ir.always {
-            genln!("always @(posedge {}) begin", clk.name);
+        for a in &ir.always {
+            genln!("always @(posedge {}) begin", a.clk.name);
             {
                 let _s = Scope::new(cur_tab.clone());
-                genln!("if ({}) begin", cond);
+                genln!("if ({}) begin", a.cond);
                 {
                     let _s = Scope::new(cur_tab.clone());
-                    for assign in assigns {
+                    for assign in a.assigns {
                         genln!("{} <= {}", assign.lhs, assign.rhs);
                     }
                 }
@@ -127,14 +127,15 @@ fn generate_verilog_test() {
         regs: vec![VVar {name: String::from("a"), bits: 32, idx: Some(3)}, VVar {name: String::from("b"), bits: 64, idx: None}],
         wires: vec![VAssign {lhs: VVar {name: String::from("c"), bits: 32, idx: None}, rhs: VExpr::BinExp(BinOp::Plus, Box::new(VExpr::Var(VVar {name: String::from("a"), bits: 32, idx: Some(0)})), Box::new(VExpr::Const(1)) )}],
         always: vec![
-            (VVar {name: String::from("clk"), bits: 1, idx: None},
-             VExpr::BinExp(BinOp::LT, 
-                Box::new(VExpr::Var(VVar {name: String::from("a"), bits: 32, idx: Some(0)})), 
-                Box::new(VExpr::Var(VVar {name: String::from("b"), bits: 32, idx: None}))), 
-                vec![
+            VAlways {
+                clk: VVar {name: String::from("clk"), bits: 1, idx: None},
+                cond: VExpr::BinExp(BinOp::LT, 
+                    Box::new(VExpr::Var(VVar {name: String::from("a"), bits: 32, idx: Some(0)})), 
+                    Box::new(VExpr::Var(VVar {name: String::from("b"), bits: 32, idx: None}))), 
+                assigns: vec![
                     VAssign {lhs: VVar {name: String::from("a"), bits: 32, idx: Some(0)}, rhs: VExpr::Var(VVar {name: String::from("c"), bits: 32, idx: None})},
                 ]
-            ),
+            },
         ]
     };
     generate_verilog_to_stream(&ir, &mut vec);

@@ -22,9 +22,10 @@ pub enum Arg {
     Val(i32)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum UnOp {
     Neg,
+    Not,
 }
 
 impl fmt::Display for UnOp {
@@ -33,7 +34,7 @@ impl fmt::Display for UnOp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BinOp {
     Plus,
     Minus,
@@ -78,7 +79,7 @@ impl fmt::Display for BinOp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TerOp {
     Select
 }
@@ -211,7 +212,7 @@ pub enum DepType {
 
 #[derive(Debug)]
 pub struct Edge {
-    pub other: Var,
+    pub var: Var,
     pub dep_type: DepType,
 }
 
@@ -223,15 +224,22 @@ pub struct DFGNode<SCHED> {
     pub sched: SCHED,
 }
 
+pub type DFG<SCHED> = HashMap<Var, DFGNode<SCHED>>;
+
 #[derive(Debug)]
-pub enum DFGBB<SCHED, II> {
-    Seq(DFGNode<SCHED>),
-    Pipe(DFGNode<SCHED>, Var, II)
+pub enum DFGBBBody<SCHED, II> {
+    Seq(DFG<SCHED>),
+    Pipe(DFG<SCHED>, Var, II)
 }
 
-pub type DFG<SCHED, II> = HashMap<Var, DFGBB<SCHED, II>>;
+#[derive(Debug)]
+pub struct DFGBB<SCHED, II> {
+    pub prevs: Vec<Label>, 
+    pub dfg: DFGBBBody<SCHED, II>,
+    pub exit: ExitOp
+}
 
-pub type CDFG<SCHED, II> = HashMap<Label, DFG<SCHED, II>>;
+pub type CDFG<SCHED, II> = HashMap<Label, DFGBB<SCHED, II>>;
 
 // T is the additional info for DFG, U is the additional info for 
 #[derive(Debug)]
@@ -239,7 +247,7 @@ pub struct GenCDFGIR<SCHED: fmt::Debug, II: fmt::Debug> {
     pub name: String,
     pub start: Label,
     pub params: Vec<Var>,
-    pub dfg: CDFG<SCHED, II>,
+    pub cdfg: CDFG<SCHED, II>,
     pub returns: Vec<Var>
 }
 
@@ -251,7 +259,7 @@ pub struct Sched {
 pub type CDFGIR = GenCDFGIR<(), ()>;
 pub type SchedCDFGIR = GenCDFGIR<Sched, i32>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VVar {
     pub name: String,
     pub bits: i32,
@@ -268,7 +276,7 @@ impl fmt::Display for VVar {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum VExpr {
     UnExp(UnOp, Box<VExpr>),
     BinExp(BinOp, Box<VExpr>, Box<VExpr>),
@@ -324,10 +332,17 @@ impl fmt::Display for IOType {
 }
 
 #[derive(Debug)]
+pub struct VAlways {
+    pub clk: VVar,
+    pub cond: VExpr,
+    pub assigns: Vec<VAssign>,
+}
+
+#[derive(Debug)]
 pub struct VerilogIR {
     pub name: String,
     pub io_params: Vec<(VVar, IOType)>,
     pub regs: Vec<VVar>,
     pub wires: Vec<VAssign>,
-    pub always: Vec<(VVar, VExpr, Vec<VAssign>)>,
+    pub always: Vec<VAlways>,
 }
