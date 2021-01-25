@@ -1,20 +1,24 @@
 use std::fmt;
 use std::collections::HashMap;
+use std::rc::Rc;
 
-#[derive(Debug)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Var {
-    pub name: String
+    pub name: String,
 }
 
 pub fn var_from_str(s: &str) -> Var {
-    Var {name : String::from(s)}
+    Var { name : String::from(s) }
 }
 
 pub fn var_from_string(s: String) -> Var {
-    Var {name : s}
+    Var { name : s }
 }
 
 pub type Label = String;
+pub fn label_from_str(s: &str) -> Label {
+    String::from(s)
+}
 
 #[derive(Debug)]
 pub enum Arg {
@@ -22,7 +26,7 @@ pub enum Arg {
     Val(i32)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum UnOp {
     Neg,
     Not,
@@ -34,7 +38,7 @@ impl fmt::Display for UnOp {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum BinOp {
     Plus,
     Minus,
@@ -79,7 +83,7 @@ impl fmt::Display for BinOp {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum TerOp {
     Select
 }
@@ -206,8 +210,9 @@ pub struct GatedSSAIR {
 // e.g., Anti/Output, May/Must/...
 #[derive(Debug)]
 pub enum DepType {
-    Independent,
-    Carried(i32)
+    Intra,
+    Carried(i32),
+    InterBB,
 }
 
 #[derive(Debug)]
@@ -235,7 +240,7 @@ pub enum DFGBBBody<SCHED, II> {
 #[derive(Debug)]
 pub struct DFGBB<SCHED, II> {
     pub prevs: Vec<Label>, 
-    pub dfg: DFGBBBody<SCHED, II>,
+    pub body: DFGBBBody<SCHED, II>,
     pub exit: ExitOp
 }
 
@@ -278,9 +283,9 @@ impl fmt::Display for VVar {
 
 #[derive(Debug, Clone)]
 pub enum VExpr {
-    UnExp(UnOp, Box<VExpr>),
-    BinExp(BinOp, Box<VExpr>, Box<VExpr>),
-    TerExp(TerOp, Box<VExpr>, Box<VExpr>, Box<VExpr>),
+    UnExp(UnOp, Rc<VExpr>),
+    BinExp(BinOp, Rc<VExpr>, Rc<VExpr>),
+    TerExp(TerOp, Rc<VExpr>, Rc<VExpr>, Box<VExpr>),
     Const(i32),
     Var(VVar)
 }
@@ -290,7 +295,8 @@ impl fmt::Display for VExpr {
         match self {
             VExpr::UnExp(op, e) => {
                 match op {
-                    UnOp::Neg => write!(f, "-({})", e)
+                    UnOp::Neg => write!(f, "-({})", e),
+                    UnOp::Not => write!(f, "!({})", e),
                 }
             },
             VExpr::BinExp(op, e1, e2) => {

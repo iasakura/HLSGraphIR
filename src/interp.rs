@@ -19,7 +19,8 @@ fn interp_arg(arg: &Arg, env: &Env) -> i32 {
 
 fn interp_unop(op: &UnOp, arg: &Arg, env: &Env, _prev_index: i32, _is_first: bool) -> i32 {
     match op {
-        UnOp::Neg => - interp_arg(arg, env)
+        UnOp::Neg => - interp_arg(arg, env),
+        UnOp::Not => to_int(!to_bool(interp_arg(arg, env)))
     }
 }
 

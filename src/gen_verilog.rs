@@ -40,7 +40,7 @@ impl Scope {
 }
 
 pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
-    let mut cur_tab = Rc::new(RefCell::new(0));
+    let cur_tab = Rc::new(RefCell::new(0));
     stream.write(indoc!{r#"
         `define to_int(val) \
             {{31{1'b0}}, (val)}
@@ -60,7 +60,7 @@ pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
     macro_rules! genln {
         ( $( $e:expr ),* ) => {
             gen!($($e),*);
-            stream.write("\n".as_bytes());
+            stream.write("\n".as_bytes()).unwrap();
         };
     }
     
@@ -94,7 +94,7 @@ pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
                 genln!("if ({}) begin", a.cond);
                 {
                     let _s = Scope::new(cur_tab.clone());
-                    for assign in a.assigns {
+                    for assign in &a.assigns {
                         genln!("{} <= {}", assign.lhs, assign.rhs);
                     }
                 }
@@ -108,7 +108,7 @@ pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
 
 pub fn generate_verilog_to_file(ir: &VerilogIR, filename: &str) {
     let mut stream = io::BufWriter::new(fs::File::create(filename).unwrap());
-    ()
+    generate_verilog_to_stream(ir, &mut stream);
 }
 
 #[test]
@@ -125,13 +125,13 @@ fn generate_verilog_test() {
             (VVar {name: String::from("ret"), bits: 32, idx: None}, IOType::OutputReg)
         ],
         regs: vec![VVar {name: String::from("a"), bits: 32, idx: Some(3)}, VVar {name: String::from("b"), bits: 64, idx: None}],
-        wires: vec![VAssign {lhs: VVar {name: String::from("c"), bits: 32, idx: None}, rhs: VExpr::BinExp(BinOp::Plus, Box::new(VExpr::Var(VVar {name: String::from("a"), bits: 32, idx: Some(0)})), Box::new(VExpr::Const(1)) )}],
+        wires: vec![VAssign {lhs: VVar {name: String::from("c"), bits: 32, idx: None}, rhs: VExpr::BinExp(BinOp::Plus, Rc::new(VExpr::Var(VVar {name: String::from("a"), bits: 32, idx: Some(0)})), Rc::new(VExpr::Const(1)) )}],
         always: vec![
             VAlways {
                 clk: VVar {name: String::from("clk"), bits: 1, idx: None},
                 cond: VExpr::BinExp(BinOp::LT, 
-                    Box::new(VExpr::Var(VVar {name: String::from("a"), bits: 32, idx: Some(0)})), 
-                    Box::new(VExpr::Var(VVar {name: String::from("b"), bits: 32, idx: None}))), 
+                    Rc::new(VExpr::Var(VVar {name: String::from("a"), bits: 32, idx: Some(0)})), 
+                    Rc::new(VExpr::Var(VVar {name: String::from("b"), bits: 32, idx: None}))), 
                 assigns: vec![
                     VAssign {lhs: VVar {name: String::from("a"), bits: 32, idx: Some(0)}, rhs: VExpr::Var(VVar {name: String::from("c"), bits: 32, idx: None})},
                 ]
@@ -139,6 +139,6 @@ fn generate_verilog_test() {
         ]
     };
     generate_verilog_to_stream(&ir, &mut vec);
-    let str = vec.iter().map(|&s| s as char).collect::<String>();
-    println!("verilog: \n {}", str);
+    let s = vec.iter().map(|&u| u as char).collect::<String>();
+    println!("verilog: \n {}", s);
 }

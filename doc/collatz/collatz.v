@@ -16,6 +16,7 @@ module collatz(
     input [31:0] n;
     output reg [31:0] ret0;
 
+    // State machine definition
     parameter ST_INIT = 2'd0;
     parameter ST_LOOP = 2'd1;
     parameter ST_EXIT = 2'd2;
@@ -78,6 +79,10 @@ module collatz(
         end
     end
 
+    //
+    // ST_INIT
+    //
+    // state in ST_INIT
     reg [31:0] reg_cur0;
     reg [31:0] reg_step0;
     reg [31:0] reg_test0;
@@ -90,10 +95,6 @@ module collatz(
     assign wire_step0 = 32'b0;
     assign wire_test0 = `to_int(n > 32'b1);
 
-    //
-    // ST_INIT
-    //
-    // state in ST_INIT
     reg [0:0] st_init_cnt;
 
     always @(posedge clk) begin
