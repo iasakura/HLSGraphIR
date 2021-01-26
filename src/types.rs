@@ -347,7 +347,8 @@ pub struct VAlways {
 #[derive(Debug)]
 pub struct VerilogIR {
     pub name: String,
-    pub io_params: Vec<(VVar, IOType)>,
+    pub localparams: Vec<(VVar, i32)>,
+    pub io_signals: Vec<(VVar, IOType)>,
     pub regs: Vec<VVar>,
     pub wires: Vec<VAssign>,
     pub always: Vec<VAlways>,

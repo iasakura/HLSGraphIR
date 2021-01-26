@@ -11,7 +11,7 @@ fn make_var_decl(var_spec: &str, name: &str, bits: i32, arr_size: Option<i32>) -
     let mut ret = var_spec.to_string();
     ret.push_str(" ");
     if bits != 1 {
-        ret.push_str(&format!("[{},0] ", bits - 1));
+        ret.push_str(&format!("[{}:0] ", bits - 1));
     }
     ret.push_str(name);
     match arr_size {
@@ -63,29 +63,37 @@ pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
             stream.write("\n".as_bytes()).unwrap();
         };
     }
+    macro_rules! genstmt {
+        ( $( $e:expr ),* ) => {
+            gen!( $($e),* );
+            stream.write(";\n".as_bytes()).unwrap();
+        }
+    };
     
 
     genln!("module {}(", ir.name);
     {
         let _s = Scope::new(cur_tab.clone());
-        for (v, _) in &ir.io_params {
-            genln!("{},", v.name);
-        }
+        let args = ir.io_signals.iter().map(|(v, _)| v.name.clone()).collect::<Vec<_>>().join(",\n    ");
+        genln!("{}", &args);
     }
     gen!(");\n");
     {
         let _s = Scope::new(cur_tab.clone());
-        for (v, io) in &ir.io_params {
-            genln!("{}", make_var_decl(&io.to_string(), &v.name, v.bits, None));
+        for (v, io) in &ir.io_signals {
+            genstmt!("{}", make_var_decl(&io.to_string(), &v.name, v.bits, None));
+        }
+        for p in &ir.localparams {
+            genstmt!("localparam {} = {}", p.0, p.1);
         }
         for v in &ir.regs {
-            genln!("{}", make_var_decl("reg", &v.name, v.bits, v.idx));
+            genstmt!("{}", make_var_decl("reg", &v.name, v.bits, v.idx));
         }
         for w in &ir.wires {
-            genln!("{}", make_var_decl("wire", &w.lhs.name, w.lhs.bits, None));
+            genstmt!("{}", make_var_decl("wire", &w.lhs.name, w.lhs.bits, None));
         }
         for w in &ir.wires {
-            genln!("assign {} = {}", w.lhs, w.rhs);
+            genstmt!("assign {} = {}", w.lhs, w.rhs);
         }
         for a in &ir.always {
             genln!("always @(posedge {}) begin", a.clk.name);
@@ -95,7 +103,7 @@ pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
                 {
                     let _s = Scope::new(cur_tab.clone());
                     for assign in &a.assigns {
-                        genln!("{} <= {}", assign.lhs, assign.rhs);
+                        genstmt!("{} <= {}", assign.lhs, assign.rhs);
                     }
                 }
                 genln!("end");
@@ -116,7 +124,10 @@ fn generate_verilog_test() {
     let mut vec: Vec<u8> = Vec::new();
     let ir = VerilogIR {
         name: String::from("test_module"),
-        io_params: vec![
+        localparams: vec![
+            (VVar {name: String::from("CONSTANT"), bits: 1, idx: None }, 42),
+        ],
+        io_signals: vec![
             (VVar {name: String::from("clk"), bits: 1, idx: None}, IOType::Input), 
             (VVar {name: String::from("rst_n"), bits: 1, idx: None}, IOType::Input),
             (VVar {name: String::from("start"), bits: 1, idx: None}, IOType::Input),
