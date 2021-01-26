@@ -2,7 +2,7 @@ use std::fmt;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-#[derive(PartialEq, Eq, Hash, Debug)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Var {
     pub name: String,
 }
@@ -20,7 +20,7 @@ pub fn label_from_str(s: &str) -> Label {
     String::from(s)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Arg {
     Var(Var),
     Val(i32)
@@ -88,7 +88,7 @@ pub enum TerOp {
     Select
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expr {
     Copy (Arg),
     UnExp (UnOp, Arg),
@@ -156,9 +156,9 @@ pub fn select(a1 : Arg, a2 : Arg, a3: Arg) -> Expr {
     Expr::TerExp(TerOp::Select, a1, a2, a3)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Stmt {
-    pub var: String,
+    pub var: Var,
     pub expr: Expr,
 }
 
@@ -285,7 +285,7 @@ impl fmt::Display for VVar {
 pub enum VExpr {
     UnExp(UnOp, Rc<VExpr>),
     BinExp(BinOp, Rc<VExpr>, Rc<VExpr>),
-    TerExp(TerOp, Rc<VExpr>, Rc<VExpr>, Box<VExpr>),
+    TerExp(TerOp, Rc<VExpr>, Rc<VExpr>, Rc<VExpr>),
     Const(i32),
     Var(VVar)
 }
@@ -317,7 +317,7 @@ impl fmt::Display for VExpr {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VAssign {
     pub lhs: VVar,
     pub rhs: VExpr

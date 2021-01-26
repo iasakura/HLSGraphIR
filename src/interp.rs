@@ -84,7 +84,7 @@ fn interp_expr(expr: &Expr, env: &Env, prev_index: i32, is_first: bool) -> i32 {
 
 fn interp_stmt(stmt: &Stmt, env: &mut Env, prev_index: i32, is_first: bool) {
     // println!("{:?}", stmt);
-    env.insert(stmt.var.clone(), interp_expr(&stmt.expr, env, prev_index, is_first));
+    env.insert(stmt.var.name.clone(), interp_expr(&stmt.expr, env, prev_index, is_first));
 }
 
 fn get_bb<'a>(cfg: &'a CFG, l: &Label) -> &'a BB {

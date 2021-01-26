@@ -60,43 +60,55 @@ fn get<'a, K : std::hash::Hash + std::cmp::Eq + std::fmt::Debug, V>(map: &'a Has
     map.get(key).expect(&format!("{:?} is not found.\n", key))
 }
 
-fn reduce(es: &Vec<VExpr>, op: &BinOp) -> Option<VExpr> {
+fn reduce(es: &Vec<VExpr>, op: BinOp) -> Option<VExpr> {
     if es.len() == 0 {
         None
     } else {
         let mut ret = es[0].clone();
         for e in &es[1..] {
-            ret = VExpr::BinExp(*op, Rc::new(ret), Rc::new(e.clone()));
+            ret = VExpr::BinExp(op, Rc::new(ret), Rc::new(e.clone()));
         }
         Some(ret)
     }
 }
 
-fn ir_var_to_verilog_var(var: &Var) -> VVar {
+fn ir_var_to_vvar(var: &Var) -> VVar {
     VVar {name: var.name.clone(), bits: 32, idx: None}
+}
+
+fn ir_arg_to_vexpr(a: &Arg) -> VExpr {
+    match a {
+        Arg::Var(v) => VExpr::Var(ir_var_to_vvar(v)),
+        Arg::Val(n) => VExpr::Const(*n)
+    }
+}
+
+fn ir_expr_to_vexpr(e: &Expr) -> VExpr {
+    match e {
+        Expr::UnExp(op, a) => VExpr::UnExp(*op, Rc::new(ir_arg_to_vexpr(a))),
+        Expr::BinExp(op, a1, a2) => {
+            match op {
+                BinOp::Mu => _,
+                BinOp::Ita => _,
+                _ => VExpr::BinExp(*op, Rc::new(ir_arg_to_vexpr(a1)), Rc::new(ir_arg_to_vexpr(a2))),
+            }
+        },
+        Expr::TerExp(op, a1, a2, a3) => VExpr::TerExp(*op, Rc::new(ir_arg_to_vexpr(a1)), Rc::new(ir_arg_to_vexpr(a2)), Rc::new(ir_arg_to_vexpr(a3))),
+        Expr::Copy(Arg::Val(n)) => VExpr::Const(*n),
+        Expr::Copy(Arg::Var(v)) => VExpr::Var(ir_var_to_vvar(v))
+    }
 }
 
 fn make_rst_n() -> VVar {
     VVar {name: String::from("rst_n"), bits: 1, idx: None}
 }
 
-// Create CFG state machine and returs en/done signals 
-fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState) 
-    -> (HashMap<Label, VVar>, HashMap<Label, VVar>) {
-    // make CFG FSM
-    let cur_state = cs.new_reg("cur_state", 1, None);
-    let prev_state = cs.new_reg("prev_state", 1, None);
-
+fn gen_states(ir: &SchedCDFGIR, cs: &mut CompilerState) -> (HashMap<Label, VVar>, HashMap<Label, VVar>, HashMap<Label, VVar>) {
+    // Create ens/dones/states;
     let mut ens = HashMap::<Label, VVar>::new();
     let mut dones = HashMap::<Label, VVar>::new();
     let mut states = HashMap::<Label, VVar>::new();
 
-    let rst_n = make_rst_n();
-
-    let not_reset = VExpr::Var (rst_n.clone());
-    let reset = VExpr::UnExp(UnOp::Not, Rc::new(VExpr::Var (rst_n.clone())));
-
-    // Create ens/dones/states;
     let finish_state = FINISH_STATE.to_string();
     let labels = ir.cdfg.iter().map(|(l, _)| l).chain(iter::once(&finish_state)).collect::<Vec<_>>();
     {
@@ -113,7 +125,20 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState)
             cnt += 1;
         }
     }
-    
+    (ens, dones, states)
+}
+
+// Create CFG state machine and returs en/done signals 
+fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, ens: &HashMap<Label, VVar>, dones: &HashMap<Label, VVar>, states: &HashMap<Label, VVar>, init_actions: &HashMap<Label, Vec<VAssign>>) {
+    // make CFG FSM
+    let cur_state = cs.new_reg("cur_state", 1, None);
+    let prev_state = cs.new_reg("prev_state", 1, None);
+
+    let rst_n = make_rst_n();
+
+    let not_reset = VExpr::Var (rst_n.clone());
+    let reset = VExpr::UnExp(UnOp::Not, Rc::new(VExpr::Var (rst_n.clone())));
+
     // State machine init
     {
         let start = ir.start.clone();
@@ -121,6 +146,9 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState)
         let mut assigns = Vec::<VAssign>::new();
         assigns.push(VAssign {lhs: cur_state.clone(), rhs: VExpr::Var(start_state.clone())});
         assigns.push(VAssign {lhs: prev_state.clone(), rhs: VExpr::Var(start_state.clone())});
+        for a in init_actions.get(&start).unwrap() {
+            assigns.push(a.clone());
+        }
         // TODO: Add initialization of ``start'' state
         cs.add_event(reset, assigns);
     }
@@ -139,7 +167,7 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState)
         let disable = VAssign {lhs: l_en.clone(), rhs: VExpr::Const(0)};
         // prev_state <= cur_state
         let prev_assign = VAssign {lhs: prev_state.clone(), rhs: VExpr::Var (cur_state.clone())};
-        cs.add_event(reduce(&conds, &BinOp::And).unwrap(), vec![disable, prev_assign]);
+        cs.add_event(reduce(&conds, BinOp::And).unwrap(), vec![disable, prev_assign]);
         
         let mut add_transition = |next_l: &Label, extra_cond: &Option<VExpr>| {
             let next_state = get(&states, next_l).clone();
@@ -147,15 +175,20 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState)
             let enable = VAssign {lhs: next_en, rhs: VExpr::Const(1)};
             let change_cur_state = VAssign {lhs: cur_state.clone(), rhs: VExpr::Var(next_state.clone())};
             // TODO: add initialization of the next state
-            let actions = vec![enable, change_cur_state];
+            let mut actions = vec![enable, change_cur_state];
+            if let Some(inits) = init_actions.get(next_l) {
+                for a in inits {
+                    actions.push(a.clone());
+                }
+            }
             match extra_cond {
                 None => {
-                    cs.add_event(reduce(&conds, &BinOp::And).unwrap(), actions);
+                    cs.add_event(reduce(&conds, BinOp::And).unwrap(), actions);
                 }
                 Some (c) => { 
                     // TODO: Refactor
                     conds.push(c.clone());
-                    cs.add_event(reduce(&conds, &BinOp::And).unwrap(), actions);
+                    cs.add_event(reduce(&conds, BinOp::And).unwrap(), actions);
                     conds.pop();
                 }
             }
@@ -165,7 +198,7 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState)
                 add_transition(next_l, &None);
             },
             ExitOp::JC(ref cond, ref next_l1, ref next_l2) => {
-                let t_cond = VExpr::Var(ir_var_to_verilog_var(cond.clone()));
+                let t_cond = VExpr::Var(ir_var_to_vvar(&cond.clone()));
                 let f_cond = VExpr::UnExp(UnOp::Not, Rc::new(t_cond.clone()));
                 for (l, cond) in vec![(&next_l1, &t_cond), (&next_l2, &f_cond)] {
                     add_transition(l, &Some(cond.clone()));
@@ -176,8 +209,67 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState)
             }
         }
     }
+}
 
-    (ens, dones)
+fn min_sched_time(dfg: &DFG<Sched>) -> i32 {
+    dfg.iter().map(|(_, node)| { node.sched.sched }).min().expect("Error: No nodes.\n")
+}
+
+fn max_sched_time(dfg: &DFG<Sched>) -> i32 {
+    dfg.iter().map(|(_, node)| { node.sched.sched }).max().expect("Error: No nodes.\n")
+}
+
+fn compile_to_action(stmt: &Stmt) -> VAssign {
+    let vvar = ir_var_to_vvar(&stmt.var);
+    let vexpr = ir_expr_to_vexpr(&stmt.expr);
+    VAssign { lhs: vvar, rhs: vexpr }
+}
+
+// Create seq machine, and returns its initialization actions.
+fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, en: &VVar, done: &VVar, cs: &mut CompilerState) -> Vec<VAssign> {
+    let cnt = cs.new_reg(&format!("{}_cnt", l), 32, None);
+    let mut conds = vec![VExpr::Var(en.clone())];
+    let min_time = min_sched_time(dfg);
+    let max_time = max_sched_time(dfg);
+    let init_action = VAssign {lhs: cnt.clone(), rhs: VExpr::Const(min_time)};
+
+    let mut sched_ops = HashMap::<i32, Vec<Stmt>>::new();
+    for (_v, node) in dfg {
+        sched_ops.entry(node.sched.sched).or_insert(vec![]).push(node.stmt.clone());
+    }
+
+    for i in min_time..=max_time {
+        conds.push(VExpr::BinExp(BinOp::Eq, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(i))));
+        let mut actions = sched_ops.get(&i).unwrap().iter().map(|stmt|
+            compile_to_action(stmt)
+        ).collect::<Vec<_>>();
+        // Finalizations
+        if i == max_time {
+            actions.push(VAssign {lhs: done.clone(), rhs: VExpr::Const(1) });
+        }
+        cs.add_event(reduce(&conds, BinOp::And).unwrap(), actions);
+        conds.pop();
+    }
+
+    vec![init_action]
+}
+
+// Create pipe machine, and returns its initialization actions.
+fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, cond: &VVar, ii: i32, en: &VVar, done: &VVar, cs: &mut CompilerState) -> Vec<VAssign> {
+    // TODO: implement
+    vec![]
+}
+
+fn gen_dfg_machine(l: &Label, dfgbb: &DFGBB<Sched, i32>, en: &VVar, done: &VVar, cs: &mut CompilerState) -> Vec<VAssign> {
+    match &dfgbb.body {
+        DFGBBBody::Seq(dfg) => {
+            gen_seq_machine(l, dfg, en, done, cs)
+        },
+        DFGBBBody::Pipe(dfg, cond, ii) => {
+            let cond_v = ir_var_to_vvar(cond);
+            gen_pipe_machine(l, dfg, &cond_v, *ii, en, done, cs)
+        }
+    }
 }
 
 fn gen_verilog_definitions(ir: &SchedCDFGIR) -> (Vec<(VVar, i32)>, Vec<VVar>, Vec<VAssign>, Vec<VAlways>) {
@@ -187,7 +279,13 @@ fn gen_verilog_definitions(ir: &SchedCDFGIR) -> (Vec<(VVar, i32)>, Vec<VVar>, Ve
     let always = Vec::<VAlways>::new();
 
     let mut cs = CompilerState::new(params, regs, wires, always);
-    let (ens, dones) = gen_cfg_state_machine(ir, &mut cs);
+    let (ens, dones, states) = gen_states(&ir, &mut cs);
+    let mut init_actions = HashMap::<Label, Vec<VAssign>>::new();
+    for (l, dfgbb) in &ir.cdfg {
+        let actions = gen_dfg_machine(&l, &dfgbb, &ens.get(l).unwrap(), &dones.get(l).unwrap(), &mut cs);
+        init_actions.insert(String::from(l), actions);
+    }
+    gen_cfg_state_machine(ir, &mut cs, &ens, &dones, &states, &init_actions);
 
     (cs.localparams, cs.regs, cs.wires, cs.always)
 }
@@ -202,7 +300,6 @@ pub fn compile_sched_cdfg_ir(ir: &SchedCDFGIR) ->VerilogIR {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::*;
     use crate::gen_verilog;
 
     fn v(s: &str) -> Var {
@@ -218,7 +315,7 @@ mod tests {
     }
 
     fn stmt(v: &str, e: Expr) -> Stmt {
-        Stmt {var: String::from(v), expr: e}
+        Stmt {var: Var {name: String::from(v) }, expr: e}
     }
 
     fn s(v: &str) -> String {
