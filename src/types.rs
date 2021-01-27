@@ -46,7 +46,7 @@ pub enum BinOp {
     Div,
     Mod,
 
-    Eq,
+    EQ,
     LT,
     GT,
     LE,
@@ -59,6 +59,13 @@ pub enum BinOp {
     Ita
 }
 
+pub fn is_bool_op(op: &BinOp) -> bool {
+    match op {
+        BinOp::EQ | BinOp::LT | BinOp::GT | BinOp::LE | BinOp::GE => true,
+        _ => false
+    }
+}
+
 impl fmt::Display for BinOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -68,7 +75,7 @@ impl fmt::Display for BinOp {
             BinOp::Div => write!(f, "/"),
             BinOp::Mod => write!(f, "%"),
 
-            BinOp::Eq => write!(f, "=="),
+            BinOp::EQ => write!(f, "=="),
             BinOp::LT => write!(f, "<"),
             BinOp::GT => write!(f, ">"),
             BinOp::LE => write!(f, "<="),
@@ -133,7 +140,7 @@ pub fn mod_(a1 : Arg, a2 : Arg) -> Expr {
 }
 
 pub fn eq(a1 : Arg, a2 : Arg) -> Expr {
-    Expr::BinExp(BinOp::Eq, a1, a2)
+    Expr::BinExp(BinOp::EQ, a1, a2)
 }
 
 pub fn lt(a1 : Arg, a2 : Arg) -> Expr {

@@ -50,7 +50,7 @@ fn interp_binop(op: &BinOp, arg1: &Arg, arg2: &Arg, env: &Env, prev_index: i32, 
         BinOp::Div => v1 / v2,
         BinOp::Mod => v1 % v2,
 
-        BinOp::Eq => to_int(v1 == v2),
+        BinOp::EQ => to_int(v1 == v2),
         BinOp::LT => to_int(v1 < v2),
         BinOp::GT => to_int(v1 > v2),
         BinOp::LE => to_int(v1 <= v2),
