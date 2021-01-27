@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::iter;
 
+use log::{debug, error, log_enabled, info, Level};
+
 const FINISH_STATE : &'static str = "__FINISH";
 
 fn gen_verilog_io_signals(localparams: &Vec<Var>, returns: &Vec<Var>) -> Vec<(VVar, IOType)> {
@@ -24,12 +26,65 @@ struct CompilerState {
     localparams: Vec<(VVar, i32)>,
     regs: Vec<VVar>,
     wires : Vec<VAssign>,
-    always: Vec<VAlways>
+    always: Vec<VAlways>,
+
+    cur_state: VVar,
+    prev_state: VVar,
+
+    ens: HashMap<Label, VVar>,
+    dones: HashMap<Label, VVar>,
+    states: HashMap<Label, VExpr>,
+}
+
+fn collect_vars<'a, SCHED, II>(dfgbb: &'a DFGBB<SCHED, II>) -> Vec<&'a Var> {
+    let dfg = match &dfgbb.body {
+        DFGBBBody::Seq(dfg) => dfg,
+        DFGBBBody::Pipe(dfg, _, _) => dfg,
+    };
+    dfg.iter().map(|(v, _)| v).collect::<Vec<_>>()
 }
 
 impl CompilerState {
-    fn new(localparams: Vec<(VVar, i32)>, regs: Vec<VVar>, wires : Vec<VAssign>, always: Vec<VAlways>) -> CompilerState {
-        CompilerState {localparams, regs, wires, always}
+    fn init(ir: &SchedCDFGIR) -> CompilerState {
+        // Create initial compiler state. Don't forget to update cur_state/prev_state!
+        let mut cs = CompilerState { 
+            localparams: vec![], regs: vec![], wires: vec![], always: vec![],
+            cur_state: VVar {name: String::from("dummy"), bits: 0, idx: None},
+            prev_state: VVar {name: String::from("dummy"), bits: 0, idx: None},
+            ens: HashMap::new(), dones: HashMap::new(), states: HashMap::new(),
+        };
+
+        // TODO: bitwidth
+        cs.cur_state = cs.new_reg("cur_state", 32, None);
+        cs.prev_state = cs.new_reg("prev_state", 32, None);
+
+        // Create states for all CFG block & a final states
+        let finish_state = FINISH_STATE.to_string();
+        let labels = ir.cdfg.iter().map(|(l, _)| l).chain(iter::once(&finish_state)).collect::<Vec<_>>();
+        {
+            let mut cnt = 0;
+            for &l in &labels {
+                let l_en = cs.new_reg(&format!("{}_en", l), 1, None);
+                cs.ens.insert(l.clone(), l_en.clone());
+
+                let l_done = cs.new_reg(&format!("{}_done", l), 1, None);
+                cs.dones.insert(l.clone(), l_done.clone());
+
+                let var = cs.new_localparam(&format!("{}_ST", l), cnt);
+                cs.states.insert(l.clone(), VExpr::Var(var));
+                cnt += 1;
+            }
+        }
+        // Create all registers for all SSA variables
+        for (_l, dfgbb) in &ir.cdfg {
+            let vars = collect_vars(&dfgbb);
+            debug!("defined vars of {} = {:?}", _l, vars);
+            for v in vars {
+                cs.new_reg(&v.name, 32, None);
+            }
+        }
+
+        cs
     }
 
     fn new_localparam(&mut self, name: &str, v: i32) -> VVar {
@@ -39,6 +94,11 @@ impl CompilerState {
     }
 
     fn new_reg(&mut self, name: &str, bits: i32, idx: Option<i32>) -> VVar {
+        if log_enabled!(Level::Debug) {
+            if let Some(_) =  self.regs.iter().find(|x| x.name == name) {
+                panic!("{} is already defined.\n", name)
+            }
+        }
         let v = VVar {name: String::from(name), bits, idx};
         self.regs.push(v);
         self.regs.last().unwrap().clone()
@@ -83,13 +143,28 @@ fn ir_arg_to_vexpr(a: &Arg) -> VExpr {
     }
 }
 
-fn ir_expr_to_vexpr(e: &Expr) -> VExpr {
+fn ir_expr_to_vexpr(e: &Expr, prevs: &Vec<Label>, cs: &CompilerState) -> VExpr {
     match e {
         Expr::UnExp(op, a) => VExpr::UnExp(*op, Rc::new(ir_arg_to_vexpr(a))),
         Expr::BinExp(op, a1, a2) => {
             match op {
-                BinOp::Mu => _,
-                BinOp::Ita => _,
+                BinOp::Mu => panic!("TODO: Implement"),
+                BinOp::Ita => {
+                    if prevs.len() != 2 {
+                        panic!("The number of prev node must be 2 for using Ita.\n");
+                    }
+                    let t_label = &prevs[0];
+                    let t_label_value = get(&cs.states, &t_label);
+                    VExpr::TerExp(TerOp::Select, 
+                        Rc::new(VExpr::BinExp(
+                            BinOp::EQ,
+                            // TODO: bitwidth?
+                            Rc::new(VExpr::Var(VVar {name: String::from("prev_state"), bits: 32, idx: None})), 
+                            Rc::new(t_label_value.clone())
+                        )),
+                        Rc::new(ir_arg_to_vexpr(a1)),
+                        Rc::new(ir_arg_to_vexpr(a2)))
+                }
                 _ => VExpr::BinExp(*op, Rc::new(ir_arg_to_vexpr(a1)), Rc::new(ir_arg_to_vexpr(a2))),
             }
         },
@@ -103,37 +178,9 @@ fn make_rst_n() -> VVar {
     VVar {name: String::from("rst_n"), bits: 1, idx: None}
 }
 
-fn gen_states(ir: &SchedCDFGIR, cs: &mut CompilerState) -> (HashMap<Label, VVar>, HashMap<Label, VVar>, HashMap<Label, VVar>) {
-    // Create ens/dones/states;
-    let mut ens = HashMap::<Label, VVar>::new();
-    let mut dones = HashMap::<Label, VVar>::new();
-    let mut states = HashMap::<Label, VVar>::new();
-
-    let finish_state = FINISH_STATE.to_string();
-    let labels = ir.cdfg.iter().map(|(l, _)| l).chain(iter::once(&finish_state)).collect::<Vec<_>>();
-    {
-        let mut cnt = 0;
-        for &l in &labels {
-            let l_en = cs.new_reg(&format!("{}_en", l), 1, None);
-            ens.insert(l.clone(), l_en.clone());
-    
-            let l_done = cs.new_reg(&format!("{}_done", l), 1, None);
-            dones.insert(l.clone(), l_done.clone());
-
-            let var = cs.new_localparam(&format!("{}_ST", l), cnt);
-            states.insert(l.clone(), var);
-            cnt += 1;
-        }
-    }
-    (ens, dones, states)
-}
-
 // Create CFG state machine and returs en/done signals 
-fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, ens: &HashMap<Label, VVar>, dones: &HashMap<Label, VVar>, states: &HashMap<Label, VVar>, init_actions: &HashMap<Label, Vec<VAssign>>) {
+fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, init_actions: &HashMap<Label, Vec<VAssign>>) {
     // make CFG FSM
-    let cur_state = cs.new_reg("cur_state", 1, None);
-    let prev_state = cs.new_reg("prev_state", 1, None);
-
     let rst_n = make_rst_n();
 
     let not_reset = VExpr::Var (rst_n.clone());
@@ -142,10 +189,10 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, ens: &HashMap
     // State machine init
     {
         let start = ir.start.clone();
-        let start_state = get(&states, &start);
+        let start_state = get(&cs.states, &start);
         let mut assigns = Vec::<VAssign>::new();
-        assigns.push(VAssign {lhs: cur_state.clone(), rhs: VExpr::Var(start_state.clone())});
-        assigns.push(VAssign {lhs: prev_state.clone(), rhs: VExpr::Var(start_state.clone())});
+        assigns.push(VAssign {lhs: cs.cur_state.clone(), rhs: start_state.clone()});
+        assigns.push(VAssign {lhs: cs.prev_state.clone(), rhs: start_state.clone()});
         for a in init_actions.get(&start).unwrap() {
             assigns.push(a.clone());
         }
@@ -154,26 +201,26 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, ens: &HashMap
     }
 
     for (l, bb) in &ir.cdfg {
-        let l_state = get(&states, l);
-        let l_done = get(&dones, l);
-        let l_en = get(&ens, l);
+        let l_state = get(&cs.states, l);
+        let l_done = get(&cs.dones, l);
+        let l_en = get(&cs.ens, l);
 
         let mut conds = vec![not_reset.clone()];
         // cur_satet == l_state
-        conds.push(VExpr::BinExp(BinOp::Eq, Rc::new(VExpr::Var (cur_state.clone())), Rc::new(VExpr::Var(l_state.clone()))));
+        conds.push(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var (cs.cur_state.clone())), Rc::new(l_state.clone())));
         // l_done
         conds.push(VExpr::Var(l_done.clone()));
         // l_en <= 0;
         let disable = VAssign {lhs: l_en.clone(), rhs: VExpr::Const(0)};
         // prev_state <= cur_state
-        let prev_assign = VAssign {lhs: prev_state.clone(), rhs: VExpr::Var (cur_state.clone())};
+        let prev_assign = VAssign {lhs: cs.prev_state.clone(), rhs: VExpr::Var (cs.cur_state.clone())};
         cs.add_event(reduce(&conds, BinOp::And).unwrap(), vec![disable, prev_assign]);
         
         let mut add_transition = |next_l: &Label, extra_cond: &Option<VExpr>| {
-            let next_state = get(&states, next_l).clone();
-            let next_en = get(&ens, next_l).clone();
+            let next_state = get(&cs.states, next_l).clone();
+            let next_en = get(&cs.ens, next_l).clone();
             let enable = VAssign {lhs: next_en, rhs: VExpr::Const(1)};
-            let change_cur_state = VAssign {lhs: cur_state.clone(), rhs: VExpr::Var(next_state.clone())};
+            let change_cur_state = VAssign {lhs: cs.cur_state.clone(), rhs: next_state.clone()};
             // TODO: add initialization of the next state
             let mut actions = vec![enable, change_cur_state];
             if let Some(inits) = init_actions.get(next_l) {
@@ -219,18 +266,23 @@ fn max_sched_time(dfg: &DFG<Sched>) -> i32 {
     dfg.iter().map(|(_, node)| { node.sched.sched }).max().expect("Error: No nodes.\n")
 }
 
-fn compile_to_action(stmt: &Stmt) -> VAssign {
+fn compile_stmt_to_vassign(stmt: &Stmt, prevs: &Vec<Label>, cs: &CompilerState) -> VAssign {
     let vvar = ir_var_to_vvar(&stmt.var);
-    let vexpr = ir_expr_to_vexpr(&stmt.expr);
+    let vexpr = ir_expr_to_vexpr(&stmt.expr, prevs, cs);
     VAssign { lhs: vvar, rhs: vexpr }
 }
 
 // Create seq machine, and returns its initialization actions.
-fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, en: &VVar, done: &VVar, cs: &mut CompilerState) -> Vec<VAssign> {
+fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut CompilerState) -> Vec<VAssign> {
+    let en = get(&mut cs.ens, l).clone();
+    let done = get(&mut cs.dones, l).clone();
+
     let cnt = cs.new_reg(&format!("{}_cnt", l), 32, None);
     let mut conds = vec![VExpr::Var(en.clone())];
     let min_time = min_sched_time(dfg);
     let max_time = max_sched_time(dfg);
+    debug!("Generating time between {}..{}", min_time, max_time);
+
     let init_action = VAssign {lhs: cnt.clone(), rhs: VExpr::Const(min_time)};
 
     let mut sched_ops = HashMap::<i32, Vec<Stmt>>::new();
@@ -239,9 +291,10 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, en: &VVar, done: &VVar, cs: &mut
     }
 
     for i in min_time..=max_time {
-        conds.push(VExpr::BinExp(BinOp::Eq, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(i))));
+        debug!("Generating time {}", i);
+        conds.push(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(i))));
         let mut actions = sched_ops.get(&i).unwrap().iter().map(|stmt|
-            compile_to_action(stmt)
+            compile_stmt_to_vassign(stmt, prevs, cs)
         ).collect::<Vec<_>>();
         // Finalizations
         if i == max_time {
@@ -255,37 +308,32 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, en: &VVar, done: &VVar, cs: &mut
 }
 
 // Create pipe machine, and returns its initialization actions.
-fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, cond: &VVar, ii: i32, en: &VVar, done: &VVar, cs: &mut CompilerState) -> Vec<VAssign> {
+fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, cond: &VVar, prevs: &Vec<Label>, ii: i32, cs: &mut CompilerState) -> Vec<VAssign> {
     // TODO: implement
     vec![]
 }
 
-fn gen_dfg_machine(l: &Label, dfgbb: &DFGBB<Sched, i32>, en: &VVar, done: &VVar, cs: &mut CompilerState) -> Vec<VAssign> {
+fn gen_dfg_machine(l: &Label, dfgbb: &DFGBB<Sched, i32>, cs: &mut CompilerState) -> Vec<VAssign> {
     match &dfgbb.body {
         DFGBBBody::Seq(dfg) => {
-            gen_seq_machine(l, dfg, en, done, cs)
+            gen_seq_machine(l, dfg, &dfgbb.prevs, cs)
         },
         DFGBBBody::Pipe(dfg, cond, ii) => {
             let cond_v = ir_var_to_vvar(cond);
-            gen_pipe_machine(l, dfg, &cond_v, *ii, en, done, cs)
+            gen_pipe_machine(l, dfg, &cond_v, &dfgbb.prevs, *ii, cs)
         }
     }
 }
 
 fn gen_verilog_definitions(ir: &SchedCDFGIR) -> (Vec<(VVar, i32)>, Vec<VVar>, Vec<VAssign>, Vec<VAlways>) {
-    let params = Vec::<(VVar, i32)>::new();
-    let regs = Vec::<VVar>::new();
-    let wires = Vec::<VAssign>::new();
-    let always = Vec::<VAlways>::new();
-
-    let mut cs = CompilerState::new(params, regs, wires, always);
-    let (ens, dones, states) = gen_states(&ir, &mut cs);
+    let mut cs = CompilerState::init(&ir);
     let mut init_actions = HashMap::<Label, Vec<VAssign>>::new();
     for (l, dfgbb) in &ir.cdfg {
-        let actions = gen_dfg_machine(&l, &dfgbb, &ens.get(l).unwrap(), &dones.get(l).unwrap(), &mut cs);
+        debug!("Generate label {}", l);
+        let actions = gen_dfg_machine(&l, &dfgbb, &mut cs);
         init_actions.insert(String::from(l), actions);
     }
-    gen_cfg_state_machine(ir, &mut cs, &ens, &dones, &states, &init_actions);
+    gen_cfg_state_machine(ir, &mut cs, &init_actions);
 
     (cs.localparams, cs.regs, cs.wires, cs.always)
 }
@@ -299,6 +347,10 @@ pub fn compile_sched_cdfg_ir(ir: &SchedCDFGIR) ->VerilogIR {
 
 #[cfg(test)]
 mod tests {
+    fn init() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
+
     use super::*;
     use crate::gen_verilog;
 
@@ -328,6 +380,8 @@ mod tests {
     
     #[test]
     fn collatz_sched_cdfg_ir() {
+        init();
+
         let init = {
             let mut dfg = HashMap::<Var, DFGNode<Sched>>::new();
             dfg.insert(v("cur0"), DFGNode {
@@ -359,8 +413,8 @@ mod tests {
 
         let loop_ = {
             let mut dfg = HashMap::<Var, DFGNode<Sched>>::new();
-            dfg.insert(v("cur0"), DFGNode {
-                stmt: stmt("cur0", mu(a(v("cur0")), a(v("cur1")))),
+            dfg.insert(v("cur1"), DFGNode {
+                stmt: stmt("cur1", mu(a(v("cur0")), a(v("cur2")))),
                 prevs: vec![e(v("cur0"), DepType::InterBB), e(v("cur2"), DepType::Carried(1)),],
                 succs: vec![e(v("tmp1"), DepType::Intra), 
                             e(v("tmp2"), DepType::Intra),
