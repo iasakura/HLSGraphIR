@@ -191,7 +191,7 @@ pub fn ret() -> ExitOp {
 #[derive(Debug)]
 pub enum BBBody {
     SeqBB (Vec<Stmt>),
-    PipeBB (Vec<Stmt>, Var)
+    PipeBB (Vec<Stmt>, Expr)
 }
 
 #[derive(Debug)]
@@ -241,7 +241,7 @@ pub type DFG<SCHED> = HashMap<Var, DFGNode<SCHED>>;
 #[derive(Debug)]
 pub enum DFGBBBody<SCHED, II> {
     Seq(DFG<SCHED>),
-    Pipe(DFG<SCHED>, Var, II)
+    Pipe(DFG<SCHED>, II)
 }
 
 #[derive(Debug)]
