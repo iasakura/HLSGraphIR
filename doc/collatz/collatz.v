@@ -204,7 +204,7 @@ module collatz(
             end
 
             // Stage enable signals
-            st_loop_stage_en[0] <= (st_loop_is_first || st_loop_wire_while) && !st_loop_pipeline_flush && (st_loop_cnt == 0);
+            st_loop_stage_en[0] <= (~st_loop_stage_en[0] || st_loop_wire_while) && !st_loop_pipeline_flush && (st_loop_cnt == 0);
             st_loop_stage_en[1] <= st_loop_stage_en[0];
 
             // is_first for mu
