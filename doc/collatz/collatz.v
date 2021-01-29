@@ -213,8 +213,8 @@ module collatz(
                     st_loop_is_first <= 1'b0;
                 end
                 st_loop_stage_is_first[0] <= st_loop_is_first;
-                st_loop_stage_is_first[1] <= st_loop_stage_is_first[0];
             end
+            st_loop_stage_is_first[1] <= st_loop_stage_is_first[0];
 
             // done signal
             st_loop_done <= !st_loop_is_first & st_loop_stage_en_all_disabled & st_loop_pipeline_flush;
