@@ -39,7 +39,7 @@ struct CompilerState {
 fn collect_vars<'a, SCHED, II>(dfgbb: &'a DFGBB<SCHED, II>) -> Vec<&'a Var> {
     let dfg = match &dfgbb.body {
         DFGBBBody::Seq(dfg) => dfg,
-        DFGBBBody::Pipe(dfg, _, _) => dfg,
+        DFGBBBody::Pipe(dfg, _) => dfg,
     };
     dfg.iter().map(|(v, _)| v).collect::<Vec<_>>()
 }
@@ -132,6 +132,10 @@ fn reduce_exprs(es: &Vec<VExpr>, op: BinOp) -> Option<VExpr> {
     }
 }
 
+fn all_true(es: &Vec<VExpr>) -> VExpr {
+    reduce_exprs(es, BinOp::And).unwrap()
+}
+
 fn ir_var_to_vvar(var: &Var) -> VVar {
     VVar {name: var.name.clone(), bits: 32, idx: None}
 }
@@ -143,12 +147,23 @@ fn ir_arg_to_vexpr(a: &Arg) -> VExpr {
     }
 }
 
-fn ir_expr_to_vexpr(e: &Expr, prevs: &Vec<Label>, cs: &CompilerState) -> VExpr {
+fn ir_expr_to_vexpr(e: &Expr, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &CompilerState) -> VExpr {
     match e {
         Expr::UnExp(op, a) => VExpr::UnExp(*op, Rc::new(ir_arg_to_vexpr(a))),
         Expr::BinExp(op, a1, a2) => {
             match op {
-                BinOp::Mu => panic!("TODO: Implement"),
+                BinOp::Mu => {
+                    if let Some(is_first) = is_first {
+                        VExpr::TerExp(TerOp::Select,
+                            Rc::new(VExpr::Var(is_first.clone())),
+                            Rc::new(ir_arg_to_vexpr(a1)),
+                            Rc::new(ir_arg_to_vexpr(a2)),
+                        )
+                    } else {
+                        panic!("Mu requires is_first");
+                    }
+                    
+                }
                 BinOp::Ita => {
                     if prevs.len() != 2 {
                         panic!("The number of prev node must be 2 for using Ita.\n");
@@ -214,7 +229,7 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, init_actions:
         let disable = VAssign {lhs: l_en.clone(), rhs: VExpr::Const(0)};
         // prev_state <= cur_state
         let prev_assign = VAssign {lhs: cs.prev_state.clone(), rhs: VExpr::Var (cs.cur_state.clone())};
-        cs.add_event(reduce_exprs(&conds, BinOp::And).unwrap(), vec![disable, prev_assign]);
+        cs.add_event(all_true(&conds), vec![disable, prev_assign]);
         
         let mut add_transition = |next_l: &Label, extra_cond: &Option<VExpr>| {
             let next_state = get(&cs.states, next_l).clone();
@@ -230,12 +245,12 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, init_actions:
             }
             match extra_cond {
                 None => {
-                    cs.add_event(reduce_exprs(&conds, BinOp::And).unwrap(), actions);
+                    cs.add_event(all_true(&conds), actions);
                 }
                 Some (c) => { 
                     // TODO: Refactor
                     conds.push(c.clone());
-                    cs.add_event(reduce_exprs(&conds, BinOp::And).unwrap(), actions);
+                    cs.add_event(all_true(&conds), actions);
                     conds.pop();
                 }
             }
@@ -268,7 +283,7 @@ fn max_sched_time(dfg: &DFG<Sched>) -> i32 {
 
 fn compile_stmt_to_vassign(stmt: &Stmt, prevs: &Vec<Label>, cs: &CompilerState) -> VAssign {
     let vvar = ir_var_to_vvar(&stmt.var);
-    let vexpr = ir_expr_to_vexpr(&stmt.expr, prevs, cs);
+    let vexpr = ir_expr_to_vexpr(&stmt.expr, None, prevs, cs);
     VAssign { lhs: vvar, rhs: vexpr }
 }
 
@@ -297,7 +312,7 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
         if i == max_time {
             actions.push(VAssign {lhs: done.clone(), rhs: VExpr::Const(1) });
         }
-        cs.add_event(reduce_exprs(&conds, BinOp::And).unwrap(), actions);
+        cs.add_event(all_true(&conds), actions);
         conds.pop();
     }
 
@@ -313,11 +328,12 @@ fn create_stage_stmt_map<'a>(dfg: &'a DFG<Sched>) -> HashMap<i32, Vec<&'a Stmt>>
 }
 
 // Create pipe machine, and returns its initialization actions.
-fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, cond: &VVar, prevs: &Vec<Label>, ii: i32, cs: &mut CompilerState) -> Vec<VAssign> {
+fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs: &mut CompilerState) -> Vec<VAssign> {
     let min_stage = min_sched_time(dfg);
     let max_stage = min_sched_time(dfg);
     assert!(min_stage != 0);
     let n_stage = max_stage + 1;
+    
     let bits = f64::ceil(f64::log2(f64::from(n_stage))) as i32;
 
     let cnt = cs.new_reg(format!("{}_cnt", l), bits, None);
@@ -346,14 +362,14 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, cond: &VVar, prevs: &Vec<Label>
     let loop_cond = match loop_cond_stmt {
         None => VExpr::Const(1),
         Some ((i, loop_cond_stmt)) => {
-            let loop_cond_expr = ir_expr_to_vexpr(&loop_cond_stmt.expr, prevs, cs) ;
+            let loop_cond_expr = ir_expr_to_vexpr(&loop_cond_stmt.expr, None, prevs, cs) ;
             let loop_cond_wire = cs.new_wire(format!("{}_loop_cond_wire", l), 1, None, loop_cond_expr.clone());
             let loop_cond_reg = cs.new_reg(format!("{}_loop_cond_reg", l), 1, None);
             inits.push(VAssign {lhs: loop_cond_reg.clone(), rhs: VExpr::Const(0)});
             // if (L_en && stage_en[i]) {
             conds.push(VExpr::Var(VVar {idx: Some(i), ..stage_en}));
             // loop_cond_reg <= loop_cond_reg && loop_cond_expr
-            cs.add_event(reduce_exprs(&conds, BinOp::And).unwrap(), vec![
+            cs.add_event(all_true(&conds), vec![
                 VAssign {lhs: loop_cond_reg.clone(), rhs: 
                     VExpr::BinExp(BinOp::And, 
                         Rc::new(VExpr::Var(loop_cond_reg)),
@@ -363,6 +379,7 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, cond: &VVar, prevs: &Vec<Label>
             ]);
             // }
             conds.pop();
+            // (!stage_en[0] || loop_cond) && loop_cond_reg
             VExpr::BinExp(BinOp::And,
                 Rc::new(VExpr::BinExp(BinOp::Or,
                     Rc::new(VExpr::UnExp(UnOp::Not,
@@ -391,7 +408,49 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, cond: &VVar, prevs: &Vec<Label>
             // stage_en[i] <= stage_en[i - 1];
             actions.push(VAssign {lhs: VVar {idx: Some(i), ..stage_en}, rhs: VExpr::Var( VVar {idx: Some(i - 1), ..stage_en})});
         }
-        cs.add_event(reduce_exprs(&conds, BinOp::And).unwrap(), actions);
+        cs.add_event(all_true(&conds), actions);
+        
+        {
+            // if (cnt == 0) {
+            conds.push(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt)), Rc::new(VExpr::Const(0))));
+            // if (is_first) {
+            conds.push(VExpr::Var(is_first));
+            cs.add_event(all_true(&conds), vec![VAssign {
+                lhs: is_first, rhs: VExpr::Const(0
+            )}]);
+            // }
+            conds.pop();
+            cs.add_event(all_true(&conds), vec![VAssign {
+                lhs: VVar {idx: Some(0), ..stage_is_first}, 
+                rhs: VExpr::Var(is_first)
+            }]);
+            // }
+            conds.pop();
+            for i in 1..=max_stage {
+                cs.add_event(all_true(&conds), vec![VAssign {
+                    lhs: VVar {idx: Some(i), ..stage_is_first},
+                    rhs: VExpr::Var(VVar {idx: Some(i - 1), ..stage_is_first})
+                }])
+            }
+            conds.pop();
+        }
+    }
+
+    for (i, ss) in sched_stmts {
+        conds.push(VExpr::Var (VVar {idx: Some(i), ..stage_en}));
+        let mut actions = vec![];
+        for s in ss {
+            let var = ir_var_to_vvar(&s.var);
+            if !is_loop_cond(s) {
+                // is_loop_cond need to be computed as wire
+            } else {
+                let rhs = ir_expr_to_vexpr(&s.expr, Some(&is_first), prevs, cs);
+                let wire = cs.new_wire(format!("{}_wire", var.name), var.bits, var.idx, rhs);
+                actions.push(VAssign { lhs: var, rhs: VExpr::Var (wire) })
+            }
+        }
+        cs.add_event(all_true(&conds), actions);
+        conds.pop();
     }
 
     inits
@@ -402,9 +461,8 @@ fn gen_dfg_machine(l: &Label, dfgbb: &DFGBB<Sched, i32>, cs: &mut CompilerState)
         DFGBBBody::Seq(dfg) => {
             gen_seq_machine(l, dfg, &dfgbb.prevs, cs)
         },
-        DFGBBBody::Pipe(dfg, cond, ii) => {
-            let cond_v = ir_var_to_vvar(cond);
-            gen_pipe_machine(l, dfg, &cond_v, &dfgbb.prevs, *ii, cs)
+        DFGBBBody::Pipe(dfg, ii) => {
+            gen_pipe_machine(l, dfg, &dfgbb.prevs, *ii, cs)
         }
     }
 }
@@ -558,13 +616,13 @@ mod tests {
                 succs: vec![e(v("step1"), DepType::Carried(1)),],
                 sched: Sched {sched: 0}
             });
-            dfg.insert(v("test1"), DFGNode {
-                stmt: stmt("test1", gt(a(v("cur1")), c(1))),
+            dfg.insert(v("loop_cond"), DFGNode {
+                stmt: stmt("loop_cond", gt(a(v("cur1")), c(1))),
                 prevs: vec![e(v("cur1"), DepType::Intra)],
                 succs: vec![],
                 sched: Sched {sched: 0}
             });
-            let body = DFGBBBody::Pipe(dfg, v("test1"), 2);
+            let body = DFGBBBody::Pipe(dfg, 2);
             DFGBB {
                 prevs: vec![s("INIT")],
                 body,
