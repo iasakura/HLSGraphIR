@@ -327,130 +327,151 @@ fn create_stage_stmt_map<'a>(dfg: &'a DFG<Sched>) -> HashMap<i32, Vec<&'a Stmt>>
     ret
 }
 
+fn is_loop_cond(s: &Stmt) -> bool {
+    s.var.name == "loop_cond"
+}
+
+fn rename_with_sched(a: &Arg, i: i32, dfg: &HashMap<Var, DFGNode<Sched>>) -> Arg {
+    match a {
+        Arg::Val(n) => Arg::Val(*n),
+        Arg::Var(v) => {
+            match dfg.get(v) {
+                // Operation chaining
+                Some(node) if node.sched.sched == i => Arg::Var(Var { name: format!("{}_wire", v.name) }),
+                _ => Arg::Var(v.clone())
+            }
+        }
+    }
+}
+
+fn ir_expr_to_vexpr_with_sched(e: &Expr, i: i32, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &mut CompilerState, dfg: &HashMap<Var, DFGNode<Sched>>) -> VExpr {
+    match e {
+        Expr::Copy(a) =>
+            ir_expr_to_vexpr(&Expr::Copy(rename_with_sched(a, i, dfg)), is_first, prevs, cs),
+        Expr::UnExp(op, a) =>
+            ir_expr_to_vexpr(&Expr::UnExp(*op, rename_with_sched(a, i, dfg)), is_first, prevs, cs),
+        Expr::BinExp(op, a1, a2) =>
+            ir_expr_to_vexpr(&Expr::BinExp(*op, rename_with_sched(a1, i, dfg), rename_with_sched(a2, i, dfg)), is_first, prevs, cs),
+        Expr::TerExp(op, a1, a2, a3) =>
+            ir_expr_to_vexpr(&Expr::TerExp(*op, rename_with_sched(a1, i, dfg), rename_with_sched(a2, i, dfg), rename_with_sched(a3, i, dfg)), is_first, prevs, cs),
+    }
+}
+
 // Create pipe machine, and returns its initialization actions.
 fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs: &mut CompilerState) -> Vec<VAssign> {
     let min_stage = min_sched_time(dfg);
     let max_stage = min_sched_time(dfg);
-    assert!(min_stage != 0);
+    assert!(min_stage == 0);
     let n_stage = max_stage + 1;
     
     let bits = f64::ceil(f64::log2(f64::from(n_stage))) as i32;
 
-    let cnt = cs.new_reg(format!("{}_cnt", l), bits, None);
-    let stage_en = cs.new_reg(format!("{}_stage_en", l), 1, Some(max_stage + 1));
-    let stage_is_first = cs.new_reg(format!("{}_stage_is_first", l), 1, Some(max_stage + 1));
-    let is_first = cs.new_reg(format!("{}_is_first", l), 1, None);
+    let cnt = cs.new_reg(&format!("{}_cnt", l), bits, None);
+    let stage_en = cs.new_reg(&format!("{}_stage_en", l), 1, Some(max_stage + 1));
+    let stage_is_first = cs.new_reg(&format!("{}_stage_is_first", l), 1, Some(max_stage + 1));
+    let is_first = cs.new_reg(&format!("{}_is_first", l), 1, None);
     // let is_pipeline_flush = cs.new_reg(format!("{}_pipeline_flush", l), 1, None);
 
-    let inits = vec![];
-    inits.push(VAssign {lhs: cnt, rhs: VExpr::Const(0)});
+    let mut inits = vec![];
+    inits.push(VAssign {lhs: cnt.clone(), rhs: VExpr::Const(0)});
     for i in 0..=max_stage {
-        inits.push(VAssign {lhs: VVar {idx: Some(i), ..stage_en}, rhs: VExpr::Const(0) });
-        inits.push(VAssign {lhs: VVar {idx: Some(i), ..stage_is_first}, rhs: VExpr::Const(0) });
+        inits.push(VAssign {lhs: VVar {idx: Some(i), ..stage_en.clone()}, rhs: VExpr::Const(0) });
+        inits.push(VAssign {lhs: VVar {idx: Some(i), ..stage_is_first.clone()}, rhs: VExpr::Const(0) });
     }
-    inits.push(VAssign {lhs: is_first, rhs: VExpr::Const(1)});
+    inits.push(VAssign {lhs: is_first.clone(), rhs: VExpr::Const(1)});
 
+    let mut conds = vec![VExpr::Var(get(&cs.ens, l).clone())];
     let sched_stmts = create_stage_stmt_map(dfg);
-    let loop_cond_stmt = sched_stmts.iter().find_map(|(&i, &ss)| {
-        match ss.iter().find(|s| s.var.name == "loop_cond") {
-            Some(&s) => Some((i, s)),
-            None => None,
-        }
-    });
 
-    let conds = vec![VExpr::Var(get(&cs.ens, l).clone())];
-    let loop_cond = match loop_cond_stmt {
-        None => VExpr::Const(1),
-        Some ((i, loop_cond_stmt)) => {
-            let loop_cond_expr = ir_expr_to_vexpr(&loop_cond_stmt.expr, None, prevs, cs) ;
-            let loop_cond_wire = cs.new_wire(format!("{}_loop_cond_wire", l), 1, None, loop_cond_expr.clone());
-            let loop_cond_reg = cs.new_reg(format!("{}_loop_cond_reg", l), 1, None);
-            inits.push(VAssign {lhs: loop_cond_reg.clone(), rhs: VExpr::Const(0)});
-            // if (L_en && stage_en[i]) {
-            conds.push(VExpr::Var(VVar {idx: Some(i), ..stage_en}));
-            // loop_cond_reg <= loop_cond_reg && loop_cond_expr
-            cs.add_event(all_true(&conds), vec![
-                VAssign {lhs: loop_cond_reg.clone(), rhs: 
-                    VExpr::BinExp(BinOp::And, 
-                        Rc::new(VExpr::Var(loop_cond_reg)),
-                        Rc::new(loop_cond_expr.clone())
-                    )
-                }
-            ]);
-            // }
-            conds.pop();
-            // (!stage_en[0] || loop_cond) && loop_cond_reg
-            VExpr::BinExp(BinOp::And,
-                Rc::new(VExpr::BinExp(BinOp::Or,
-                    Rc::new(VExpr::UnExp(UnOp::Not,
-                        Rc::new(VExpr::Var(VVar {idx: Some(i), ..stage_en})))),
-                    Rc::new(VExpr::Var(loop_cond_wire.clone())))),
-                Rc::new(VExpr::Var(loop_cond_reg.clone())));
-        }
-    };
-    // if (STATE_en)
-    {
-        let actions = vec![];
-        // cnt <= cnt == max_time ? 0 cnt + 1;
-        actions.push(VAssign {lhs: cnt, rhs: VExpr::TerExp(
-            TerOp::Select,
-            Rc::new(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt)), Rc::new(VExpr::Const(max_stage)))),
-            Rc::new(VExpr::Const(0)),
-            Rc::new(VExpr::BinExp(BinOp::Plus, Rc::new(VExpr::Var(cnt)), Rc::new(VExpr::Const(1)))),
-        )});
-        // stage_en[0] <= loop_cond && (cnt == 0)
-        actions.push(VAssign {lhs: VVar {idx: Some(0), ..stage_en}, rhs: VExpr::BinExp(
-            BinOp::And,
-            Rc::new(loop_cond),
-            Rc::new(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt)), Rc::new(VExpr::Const(0))))
-        )});
-        for i in 1..=max_stage {
-            // stage_en[i] <= stage_en[i - 1];
-            actions.push(VAssign {lhs: VVar {idx: Some(i), ..stage_en}, rhs: VExpr::Var( VVar {idx: Some(i - 1), ..stage_en})});
-        }
-        cs.add_event(all_true(&conds), actions);
-        
-        {
-            // if (cnt == 0) {
-            conds.push(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt)), Rc::new(VExpr::Const(0))));
-            // if (is_first) {
-            conds.push(VExpr::Var(is_first));
-            cs.add_event(all_true(&conds), vec![VAssign {
-                lhs: is_first, rhs: VExpr::Const(0
-            )}]);
-            // }
-            conds.pop();
-            cs.add_event(all_true(&conds), vec![VAssign {
-                lhs: VVar {idx: Some(0), ..stage_is_first}, 
-                rhs: VExpr::Var(is_first)
-            }]);
-            // }
-            conds.pop();
-            for i in 1..=max_stage {
-                cs.add_event(all_true(&conds), vec![VAssign {
-                    lhs: VVar {idx: Some(i), ..stage_is_first},
-                    rhs: VExpr::Var(VVar {idx: Some(i - 1), ..stage_is_first})
-                }])
-            }
-            conds.pop();
-        }
-    }
-
+    // stage, cond_wire (no delay), cond_reg (1cycle delay & remains false one cond_wire becomes false)
+    let mut loop_conds: Option<(i32, VVar, VVar)> = None;
+    // Generate datapath
     for (i, ss) in sched_stmts {
-        conds.push(VExpr::Var (VVar {idx: Some(i), ..stage_en}));
+        conds.push(VExpr::Var (VVar {idx: Some(i), ..stage_en.clone()}));
         let mut actions = vec![];
         for s in ss {
             let var = ir_var_to_vvar(&s.var);
-            if !is_loop_cond(s) {
-                // is_loop_cond need to be computed as wire
+            if is_loop_cond(s) {
+                let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&is_first), prevs, cs, dfg);
+                let wire = cs.new_wire(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
+                let loop_cond_reg = cs.new_reg(&format!("{}_loop_cond", l), 1, None);
+                inits.push(VAssign {lhs: loop_cond_reg.clone(), rhs: VExpr::Const(0)});
+                actions.push(VAssign {lhs: loop_cond_reg.clone(), rhs: 
+                    VExpr::BinExp(BinOp::And, 
+                        Rc::new(VExpr::Var(loop_cond_reg.clone())),
+                        Rc::new(VExpr::Var(wire.clone()))
+                    )
+                });
+                loop_conds = Some((i, wire, loop_cond_reg));
             } else {
-                let rhs = ir_expr_to_vexpr(&s.expr, Some(&is_first), prevs, cs);
-                let wire = cs.new_wire(format!("{}_wire", var.name), var.bits, var.idx, rhs);
+                let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&is_first), prevs, cs, dfg);
+                let wire = cs.new_wire(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
                 actions.push(VAssign { lhs: var, rhs: VExpr::Var (wire) })
             }
         }
         cs.add_event(all_true(&conds), actions);
         conds.pop();
+    }
+
+    let loop_cond = match loop_conds {
+        None => VExpr::Const(1),
+        Some ((i, loop_cond_wire, loop_cond_reg)) => {
+            VExpr::BinExp(BinOp::And,
+                Rc::new(VExpr::BinExp(BinOp::Or,
+                    Rc::new(VExpr::UnExp(UnOp::Not,
+                        Rc::new(VExpr::Var(VVar {idx: Some(i), ..stage_en.clone()})))),
+                    Rc::new(VExpr::Var(loop_cond_wire.clone())))),
+                Rc::new(VExpr::Var(loop_cond_reg.clone())))
+        }
+    };
+
+    // Generate pipeline state
+    // if (STATE_en)
+    {
+        let mut actions = vec![];
+        // cnt <= cnt == max_time ? 0 cnt + 1;
+        actions.push(VAssign {lhs: cnt.clone(), rhs: VExpr::TerExp(
+            TerOp::Select,
+            Rc::new(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(max_stage)))),
+            Rc::new(VExpr::Const(0)),
+            Rc::new(VExpr::BinExp(BinOp::Plus, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(1)))),
+        )});
+        // stage_en[0] <= loop_cond && (cnt == 0)
+        actions.push(VAssign {lhs: VVar {idx: Some(0), ..stage_en.clone()}, rhs: VExpr::BinExp(
+            BinOp::And,
+            Rc::new(loop_cond),
+            Rc::new(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(0))))
+        )});
+        for i in 1..=max_stage {
+            // stage_en[i] <= stage_en[i - 1];
+            actions.push(VAssign {lhs: VVar {idx: Some(i), ..stage_en.clone()}, rhs: VExpr::Var( VVar {idx: Some(i - 1), ..stage_en.clone()})});
+        }
+        cs.add_event(all_true(&conds), actions);
+        
+        {
+            // if (cnt == 0) {
+            conds.push(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(0))));
+            // if (is_first) {
+            conds.push(VExpr::Var(is_first.clone()));
+            cs.add_event(all_true(&conds), vec![VAssign {
+                lhs: is_first.clone(), rhs: VExpr::Const(0
+            )}]);
+            // }
+            conds.pop();
+            cs.add_event(all_true(&conds), vec![VAssign {
+                lhs: VVar {idx: Some(0), ..stage_is_first.clone()}, 
+                rhs: VExpr::Var(is_first.clone())
+            }]);
+            // }
+            conds.pop();
+            for i in 1..=max_stage {
+                cs.add_event(all_true(&conds), vec![VAssign {
+                    lhs: VVar {idx: Some(i), ..stage_is_first.clone()},
+                    rhs: VExpr::Var(VVar {idx: Some(i - 1), ..stage_is_first.clone()})
+                }])
+            }
+            conds.pop();
+        }
     }
 
     inits

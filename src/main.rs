@@ -5,6 +5,9 @@ use hls_graph_ir::dsl;
 use hls_graph_ir::types;
 use hls_graph_ir::interp;
 
+// #![feature(trace_macros)]
+// trace_macros!(true);
+
 fn main() {
     let ir = loop_ir!{
         collatz(n) {
@@ -29,9 +32,8 @@ fn main() {
                     tmp4 := mod_(cur1, 2);
                     tmp5 := eq(tmp4, 0);
                     cur2 := select(tmp5, tmp1, tmp3);
-                    step2 := plus(step1, 1);
-                    test1 := gt(cur1, 1)
-                } while (test1)
+                    step2 := plus(step1, 1)
+                } while (gt(cur1, 1))
                 exit (jmp(EXIT))
             },
             EXIT {

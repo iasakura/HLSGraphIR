@@ -25,6 +25,13 @@ macro_rules! to_expr {
 }
 
 #[macro_export]
+macro_rules! to_expr_with_paren {
+    ( ( $name:ident $args:tt ) ) => {
+        to_expr!( $name $args )
+    };
+}
+
+#[macro_export]
 macro_rules! to_body {
     ( { $( $x:ident := $name:tt $args:tt );* } ) => {
         vec!( $( hls_graph_ir::types::Stmt{ var: hls_graph_ir::types::Var {name: String::from(stringify!($x))}, expr: to_expr!( $name $args ) } ),* )
@@ -47,10 +54,10 @@ macro_rules! to_exit {
 
 #[macro_export]
 macro_rules! to_bb {
-    ( { prevs ( $($from_name:ident),* ) loop $bb_body:tt while ( $cond:tt ) exit $bb_exit:tt } ) => {
+    ( { prevs ( $($from_name:ident),* ) loop $bb_body:tt while $cond:tt exit $bb_exit:tt } ) => {
         hls_graph_ir::types::BB {
             prevs: vec![$(String::from(stringify!($from_name))),*], 
-            body: hls_graph_ir::types::BBBody::PipeBB (to_body!($bb_body), to_var!($cond)), 
+            body: hls_graph_ir::types::BBBody::PipeBB (to_body!($bb_body), to_expr_with_paren!($cond)), 
             exit: to_exit!($bb_exit)
         }
     };

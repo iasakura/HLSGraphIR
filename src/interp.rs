@@ -97,16 +97,16 @@ fn interp_seq(ss: &Vec<Stmt>, prev_index: i32, env: &mut Env) {
     }
 }
 
-fn interp_pipe(ss: &Vec<Stmt>, cond: &Var, prev_index: i32, env: &mut Env) {
+fn interp_pipe(ss: &Vec<Stmt>, cond: &Expr, prev_index: i32, env: &mut Env) {
     let mut is_first = true;
     loop {
         for stmt in ss {
             interp_stmt(stmt, env, prev_index, is_first);
         }
-        is_first = false;
-        if !to_bool(interp_var(cond, env)) {
+        if !to_bool(interp_expr(cond, env, prev_index, is_first)) {
             break;
         }
+        is_first = false;
     }
 }
 
