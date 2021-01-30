@@ -364,7 +364,7 @@ pub struct VAssign {
     pub rhs: VExpr
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum IOType {
     Input, OutputReg,
 }

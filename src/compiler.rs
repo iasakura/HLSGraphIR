@@ -9,21 +9,31 @@ use log::{debug, error, log_enabled, info, Level};
 
 const FINISH_STATE : &'static str = "__FINISH";
 
-fn gen_verilog_io_signals(localparams: &Vec<Var>, returns: &Vec<Var>) -> Vec<(VVar, IOType)> {
-    let ctrl_sigs = vec!["clk", "rst_n", "start", "finish"];
-    let var_list_of_ctrls = ctrl_sigs.iter().map(|var| {
-        (VVar {name: String::from(*var), bits: 1, idx: None}, IOType::Input)
+fn gen_verilog_io_signals(ir_params: &Vec<Var>, ir_returns: &Vec<Var>, cs: &mut CompilerState) {
+    let start = "start";
+    let finish = "finish";
+    let ctrl_sigs = vec![
+        ("clk", IOType::Input), 
+        ("rst_n", IOType::Input), 
+        (start, IOType::Input),
+        (finish, IOType::OutputReg)
+    ];
+    let var_list_of_ctrls = ctrl_sigs.iter().map(|(var, type_)| {
+        (VVar {name: String::from(*var), bits: 1, idx: None}, *type_)
     });
-    let var_list_of_params = localparams.iter().map(|var| {
+    let var_list_of_params = ir_params.iter().map(|var| {
         (VVar {name: var.name.clone(), bits: var.type_.bits, idx: None}, IOType::Input)
     });
-    let var_list_of_returns = returns.iter().map(|var| {
+    let var_list_of_returns = ir_returns.iter().map(|var| {
         (VVar {name: var.name.clone(), bits: var.type_.bits, idx: None}, IOType::OutputReg)
     });
-    var_list_of_ctrls.chain(var_list_of_params).chain(var_list_of_returns).collect::<Vec<_>>()
+    cs.io = var_list_of_ctrls.chain(var_list_of_params).chain(var_list_of_returns).collect::<Vec<_>>();
+    cs.start = VVar {name: String::from(start), bits: 1, idx: None};
+    cs.finish = VVar {name: String::from(finish), bits: 1, idx: None};
 }
 
 struct CompilerState {
+    io: Vec<(VVar, IOType)>,
     localparams: Vec<(VVar, i32)>,
     regs: Vec<VVar>,
     wires : Vec<VAssign>,
@@ -31,6 +41,9 @@ struct CompilerState {
 
     cur_state: VVar,
     prev_state: VVar,
+
+    start: VVar,
+    finish: VVar,
 
     ens: HashMap<Label, VVar>,
     dones: HashMap<Label, VVar>,
@@ -54,11 +67,15 @@ impl CompilerState {
     fn init(ir: &SchedCDFGIR) -> CompilerState {
         // Create initial compiler state. Don't forget to update cur_state/prev_state!
         let mut cs = CompilerState { 
+            io: vec![],
             localparams: vec![], regs: vec![], wires: vec![], always: vec![],
             cur_state: VVar {name: String::from("dummy"), bits: 0, idx: None},
             prev_state: VVar {name: String::from("dummy"), bits: 0, idx: None},
+            start: VVar {name: String::from("dummy"), bits: 0, idx: None},
+            finish: VVar {name: String::from("dummy"), bits: 0, idx: None},
             ens: HashMap::new(), dones: HashMap::new(), states: HashMap::new(),
         };
+        gen_verilog_io_signals(&ir.params, &ir.returns, &mut cs);
 
         // Create states for all CFG block & a final states
         let finish_state = FINISH_STATE.to_string();
@@ -215,6 +232,8 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, init_actions:
         let mut assigns = Vec::<VAssign>::new();
         assigns.push(VAssign {lhs: cs.cur_state.clone(), rhs: start_state.clone()});
         assigns.push(VAssign {lhs: cs.prev_state.clone(), rhs: start_state.clone()});
+        let start_en = cs.ens.get(&start).unwrap();
+        assigns.push(VAssign {lhs: start_en.clone(), rhs: VExpr::Const(TRUE)});
         for a in init_actions.get(&start).unwrap() {
             assigns.push(a.clone());
         }
@@ -278,6 +297,11 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, init_actions:
             }
         }
     }
+
+    let finish_en = cs.ens.get(&FINISH_STATE.to_string()).unwrap().clone();
+    cs.add_event(VExpr::BinExp(BinOp::And, Rc::new(not_reset.clone()), Rc::new(VExpr::Var(finish_en))), vec![
+        VAssign { lhs: cs.finish.clone(), rhs: VExpr::Const(TRUE) }
+    ]);
 }
 
 fn min_sched_time(dfg: &DFG<Sched>) -> i32 {
@@ -299,6 +323,10 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
     let en = get(&mut cs.ens, l).clone();
     let done = get(&mut cs.dones, l).clone();
 
+    let rst_n = make_rst_n();
+    let not_reset = VExpr::Var (rst_n.clone());
+    let reset = VExpr::UnExp(UnOp::Not, Rc::new(VExpr::Var (rst_n.clone())));
+
     let min_time = min_sched_time(dfg);
     let max_time = max_sched_time(dfg);
     let n_states = max_time - min_time + 1;
@@ -306,7 +334,7 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
 
     let nbits = bits_of_states(n_states);
     let cnt = cs.new_reg(&format!("{}_cnt", l), nbits, None);
-    let mut conds = vec![VExpr::Var(en.clone())];
+    let mut conds = vec![VExpr::Var(make_rst_n()), VExpr::Var(en.clone())];
     let type_ = Type {bits: nbits, signed: false};
 
     let init_action = VAssign {lhs: cnt.clone(), rhs: VExpr::Const(Val {val: min_time, type_: type_.clone()})};
@@ -394,7 +422,7 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
     }
     inits.push(VAssign {lhs: is_first.clone(), rhs: VExpr::Const(TRUE)});
 
-    let mut conds = vec![VExpr::Var(get(&cs.ens, l).clone())];
+    let mut conds = vec![VExpr::Var(make_rst_n()), VExpr::Var(get(&cs.ens, l).clone())];
     let sched_stmts = create_stage_stmt_map(dfg);
 
     // stage, cond_wire (no delay), cond_reg (1cycle delay & remains false one cond_wire becomes false)
@@ -501,24 +529,28 @@ fn gen_dfg_machine(l: &Label, dfgbb: &DFGBB<Sched, i32>, cs: &mut CompilerState)
     }
 }
 
-fn gen_verilog_definitions(ir: &SchedCDFGIR) -> (Vec<(VVar, i32)>, Vec<VVar>, Vec<VAssign>, Vec<VAlways>) {
-    let mut cs = CompilerState::init(&ir);
+fn gen_verilog_definitions(ir: &SchedCDFGIR, cs: &mut CompilerState) {
     let mut init_actions = HashMap::<Label, Vec<VAssign>>::new();
     for (l, dfgbb) in &ir.cdfg {
         debug!("Generate label {}", l);
-        let actions = gen_dfg_machine(&l, &dfgbb, &mut cs);
+        let actions = gen_dfg_machine(&l, &dfgbb, cs);
         init_actions.insert(String::from(l), actions);
     }
-    gen_cfg_state_machine(ir, &mut cs, &init_actions);
-
-    (cs.localparams, cs.regs, cs.wires, cs.always)
+    gen_cfg_state_machine(ir, cs, &init_actions);
 }
 
 pub fn compile_sched_cdfg_ir(ir: &SchedCDFGIR) ->VerilogIR {
     let name = &ir.name;
-    let io_signals = gen_verilog_io_signals(&ir.params, &ir.returns);
-    let (localparams, regs, wires, always) = gen_verilog_definitions(ir);
-    VerilogIR { name: name.clone() , localparams, io_signals, regs, wires, always }
+    let mut cs = CompilerState::init(&ir);
+    gen_verilog_definitions(ir, &mut cs);
+    VerilogIR { 
+        name: name.clone(), 
+        localparams: cs.localparams, 
+        io_signals: cs.io,
+        regs: cs.regs,
+        wires: cs.wires,
+        always: cs.always 
+    }
 }
 
 #[cfg(test)]
