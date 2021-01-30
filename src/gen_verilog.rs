@@ -68,8 +68,7 @@ pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
             gen!( $($e),* );
             stream.write(";\n".as_bytes()).unwrap();
         }
-    };
-    
+    }
 
     genln!("module {}(", ir.name);
     {

@@ -404,18 +404,16 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
     let min_stage = min_sched_time(dfg);
     let max_stage = max_sched_time(dfg);
     assert!(min_stage == 0);
-    let n_stage = max_stage + 1;
-    
-    let nbits = bits_of_states(n_stage);
+    let ii_nbits = bits_of_states(ii + 1);
 
-    let cnt = cs.new_reg(&format!("{}_cnt", l), nbits, None);
+    let cnt = cs.new_reg(&format!("{}_cnt", l), ii_nbits, None);
     let stage_en = cs.new_reg(&format!("{}_stage_en", l), 1, Some(max_stage + 1));
     let stage_is_first = cs.new_reg(&format!("{}_stage_is_first", l), 1, Some(max_stage + 1));
     let is_first = cs.new_reg(&format!("{}_is_first", l), 1, None);
     // let is_pipeline_flush = cs.new_reg(format!("{}_pipeline_flush", l), 1, None);
 
     let mut inits = vec![];
-    inits.push(VAssign {lhs: cnt.clone(), rhs: VExpr::Const(val(0, uint(nbits)))});
+    inits.push(VAssign {lhs: cnt.clone(), rhs: VExpr::Const(val(0, uint(ii_nbits)))});
     for i in 0..=max_stage {
         inits.push(VAssign {lhs: VVar {idx: Some(i), ..stage_en.clone()}, rhs: VExpr::Const(FALSE) });
         inits.push(VAssign {lhs: VVar {idx: Some(i), ..stage_is_first.clone()}, rhs: VExpr::Const(FALSE)});
@@ -434,10 +432,10 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
         for s in ss {
             let var = ir_var_to_vvar(&s.var);
             if is_loop_cond(s) {
-                let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&is_first), prevs, cs, dfg);
+                let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&VVar {idx: Some(i), ..stage_is_first.clone()}), prevs, cs, dfg);
                 let wire = cs.new_wire(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
                 let loop_cond_reg = cs.new_reg(&format!("{}_loop_cond", l), 1, None);
-                inits.push(VAssign {lhs: loop_cond_reg.clone(), rhs: VExpr::Const(FALSE)});
+                inits.push(VAssign {lhs: loop_cond_reg.clone(), rhs: VExpr::Const(TRUE)});
                 actions.push(VAssign {lhs: loop_cond_reg.clone(), rhs: 
                     VExpr::BinExp(BinOp::And, 
                         Rc::new(VExpr::Var(loop_cond_reg.clone())),
@@ -446,7 +444,7 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
                 });
                 loop_conds = Some((i, wire, loop_cond_reg));
             } else {
-                let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&is_first), prevs, cs, dfg);
+                let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&&VVar {idx: Some(i), ..stage_is_first.clone()}), prevs, cs, dfg);
                 let wire = cs.new_wire(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
                 actions.push(VAssign { lhs: var, rhs: VExpr::Var (wire) })
             }
@@ -455,13 +453,13 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
         conds.pop();
     }
 
-    let loop_cond = match loop_conds {
+    let loop_cond = match &loop_conds {
         None => VExpr::Const(TRUE),
         Some ((i, loop_cond_wire, loop_cond_reg)) => {
             VExpr::BinExp(BinOp::And,
                 Rc::new(VExpr::BinExp(BinOp::Or,
                     Rc::new(VExpr::UnExp(UnOp::Not,
-                        Rc::new(VExpr::Var(VVar {idx: Some(i), ..stage_en.clone()})))),
+                        Rc::new(VExpr::Var(VVar {idx: Some(*i), ..stage_en.clone()})))),
                     Rc::new(VExpr::Var(loop_cond_wire.clone())))),
                 Rc::new(VExpr::Var(loop_cond_reg.clone())))
         }
@@ -471,18 +469,18 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
     // if (STATE_en)
     {
         let mut actions = vec![];
-        // cnt <= cnt == max_time ? 0 cnt + 1;
+        // cnt <= cnt == ii ? 0 cnt + 1;
         actions.push(VAssign {lhs: cnt.clone(), rhs: VExpr::TerExp(
             TerOp::Select,
-            Rc::new(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(val(max_stage, uint(nbits)))))),
-            Rc::new(VExpr::Const(val(0, uint(nbits)))),
-            Rc::new(VExpr::BinExp(BinOp::Plus, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(val(1, uint(nbits)))))),
+            Rc::new(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(val(ii - 1, uint(ii_nbits)))))),
+            Rc::new(VExpr::Const(val(0, uint(ii_nbits)))),
+            Rc::new(VExpr::BinExp(BinOp::Plus, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(val(1, uint(ii_nbits)))))),
         )});
         // stage_en[0] <= loop_cond && (cnt == 0)
         actions.push(VAssign {lhs: VVar {idx: Some(0), ..stage_en.clone()}, rhs: VExpr::BinExp(
             BinOp::And,
             Rc::new(loop_cond),
-            Rc::new(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(val(0, uint(nbits))))))
+            Rc::new(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(val(0, uint(ii_nbits))))))
         )});
         for i in 1..=max_stage {
             // stage_en[i] <= stage_en[i - 1];
@@ -492,7 +490,7 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
         
         {
             // if (cnt == 0) {
-            conds.push(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(val(0, uint(nbits))))));
+            conds.push(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(val(0, uint(ii_nbits))))));
             // if (is_first) {
             conds.push(VExpr::Var(is_first.clone()));
             cs.add_event(all_true(&conds), vec![VAssign {
@@ -511,7 +509,32 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
                     rhs: VExpr::Var(VVar {idx: Some(i - 1), ..stage_is_first.clone()})
                 }])
             }
-            conds.pop();
+        }
+
+        if let Some((_, _, loop_cond_reg)) = loop_conds {
+            let stage_all_disabled_expr = all_true(&(min_stage..=max_stage).map(|i| { 
+                VExpr::UnExp(
+                    UnOp::Not,
+                    Rc::new(VExpr::Var(VVar { idx: Some(i), ..stage_is_first.clone() }))
+                )
+            }).collect::<Vec<_>>());
+            let stage_all_disabled = cs.new_wire(&format!("{}_stage_all_disabled", l), 1, None, stage_all_disabled_expr);
+            cs.add_event(all_true(&conds), vec![VAssign {
+                lhs: get(&cs.dones, l).clone(),
+                rhs: VExpr::BinExp(BinOp::And,
+                    Rc::new(VExpr::UnExp(
+                        UnOp::Not,
+                        Rc::new(VExpr::Var(is_first)))),
+                    Rc::new(VExpr::BinExp(
+                        BinOp::And,
+                        Rc::new(VExpr::UnExp(
+                            UnOp::Not,
+                            Rc::new(VExpr::Var(loop_cond_reg)),
+                        )),
+                        Rc::new(VExpr::Var(stage_all_disabled)),
+                    ))
+                )
+            }]);
         }
     }
 
