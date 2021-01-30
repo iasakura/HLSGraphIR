@@ -136,7 +136,7 @@ fn generate_verilog_test() {
             (VVar {name: String::from("ret"), bits: 32, idx: None}, IOType::OutputReg)
         ],
         regs: vec![VVar {name: String::from("a"), bits: 32, idx: Some(3)}, VVar {name: String::from("b"), bits: 64, idx: None}],
-        wires: vec![VAssign {lhs: VVar {name: String::from("c"), bits: 32, idx: None}, rhs: VExpr::BinExp(BinOp::Plus, Rc::new(VExpr::Var(VVar {name: String::from("a"), bits: 32, idx: Some(0)})), Rc::new(VExpr::Const(1)) )}],
+        wires: vec![VAssign {lhs: VVar {name: String::from("c"), bits: 32, idx: None}, rhs: VExpr::BinExp(BinOp::Plus, Rc::new(VExpr::Var(VVar {name: String::from("a"), bits: 32, idx: Some(0)})), Rc::new(VExpr::Const(val(1, int(32)))) )}],
         always: vec![
             VAlways {
                 clk: VVar {name: String::from("clk"), bits: 1, idx: None},

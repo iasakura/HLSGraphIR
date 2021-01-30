@@ -12,7 +12,7 @@ fn interp_var(var: &Var, env: &Env) -> i32 {
 
 fn interp_arg(arg: &Arg, env: &Env) -> i32 {
     match arg {
-        Arg::Val(i) => *i,
+        Arg::Val(i) => i.val,
         Arg::Var(v) => interp_var(v, env)
     }
 }

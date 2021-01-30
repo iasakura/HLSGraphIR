@@ -34,7 +34,7 @@ macro_rules! to_expr_with_paren {
 #[macro_export]
 macro_rules! to_body {
     ( { $( $x:ident := $name:tt $args:tt );* } ) => {
-        vec!( $( hls_graph_ir::types::Stmt{ var: hls_graph_ir::types::Var {name: String::from(stringify!($x))}, expr: to_expr!( $name $args ) } ),* )
+        vec!( $( hls_graph_ir::types::Stmt{ var: hls_graph_ir::types::Var {name: String::from(stringify!($x)), type_}, expr: to_expr!( $name $args ) } ),* )
     };
 }
 

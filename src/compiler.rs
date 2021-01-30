@@ -1,5 +1,6 @@
 use crate::types::*;
 
+use std::cmp;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::iter;
@@ -14,10 +15,10 @@ fn gen_verilog_io_signals(localparams: &Vec<Var>, returns: &Vec<Var>) -> Vec<(VV
         (VVar {name: String::from(*var), bits: 1, idx: None}, IOType::Input)
     });
     let var_list_of_params = localparams.iter().map(|var| {
-        (VVar {name: var.name.clone(), bits: 32, idx: None}, IOType::Input)
+        (VVar {name: var.name.clone(), bits: var.type_.bits, idx: None}, IOType::Input)
     });
     let var_list_of_returns = returns.iter().map(|var| {
-        (VVar {name: var.name.clone(), bits: 32, idx: None}, IOType::OutputReg)
+        (VVar {name: var.name.clone(), bits: var.type_.bits, idx: None}, IOType::OutputReg)
     });
     var_list_of_ctrls.chain(var_list_of_params).chain(var_list_of_returns).collect::<Vec<_>>()
 }
@@ -44,6 +45,11 @@ fn collect_vars<'a, SCHED, II>(dfgbb: &'a DFGBB<SCHED, II>) -> Vec<&'a Var> {
     dfg.iter().map(|(v, _)| v).collect::<Vec<_>>()
 }
 
+fn bits_of_states(n: i32) -> i32 {
+    let res = f64::ceil(f64::log2(f64::from(n))) as i32;
+    cmp::max(res, 1)
+}
+
 impl CompilerState {
     fn init(ir: &SchedCDFGIR) -> CompilerState {
         // Create initial compiler state. Don't forget to update cur_state/prev_state!
@@ -54,13 +60,15 @@ impl CompilerState {
             ens: HashMap::new(), dones: HashMap::new(), states: HashMap::new(),
         };
 
-        // TODO: bitwidth
-        cs.cur_state = cs.new_reg("cur_state", 32, None);
-        cs.prev_state = cs.new_reg("prev_state", 32, None);
-
         // Create states for all CFG block & a final states
         let finish_state = FINISH_STATE.to_string();
         let labels = ir.cdfg.iter().map(|(l, _)| l).chain(iter::once(&finish_state)).collect::<Vec<_>>();
+
+        // TODO: bitwidth
+        let nbits = bits_of_states(labels.len() as i32);
+        cs.cur_state = cs.new_reg("cur_state", nbits, None);
+        cs.prev_state = cs.new_reg("prev_state", nbits, None);
+
         {
             let mut cnt = 0;
             for &l in &labels {
@@ -70,7 +78,7 @@ impl CompilerState {
                 let l_done = cs.new_reg(&format!("{}_done", l), 1, None);
                 cs.dones.insert(l.clone(), l_done.clone());
 
-                let var = cs.new_localparam(&format!("{}_ST", l), cnt);
+                let var = cs.new_localparam(&format!("{}_ST", l), nbits, cnt);
                 cs.states.insert(l.clone(), VExpr::Var(var));
                 cnt += 1;
             }
@@ -80,15 +88,15 @@ impl CompilerState {
             let vars = collect_vars(&dfgbb);
             debug!("defined vars of {} = {:?}", _l, vars);
             for v in vars {
-                cs.new_reg(&v.name, 32, None);
+                cs.new_reg(&v.name, v.type_.bits, None);
             }
         }
 
         cs
     }
 
-    fn new_localparam(&mut self, name: &str, v: i32) -> VVar {
-        let var = VVar {name: String::from(name), bits: 32, idx: None};
+    fn new_localparam(&mut self, name: &str, bits: i32, v: i32) -> VVar {
+        let var = VVar {name: String::from(name), bits, idx: None};
         self.localparams.push((var, v));
         self.localparams.last().unwrap().0.clone()
     }
@@ -137,13 +145,13 @@ fn all_true(es: &Vec<VExpr>) -> VExpr {
 }
 
 fn ir_var_to_vvar(var: &Var) -> VVar {
-    VVar {name: var.name.clone(), bits: 32, idx: None}
+    VVar {name: var.name.clone(), bits: var.type_.bits, idx: None}
 }
 
 fn ir_arg_to_vexpr(a: &Arg) -> VExpr {
     match a {
         Arg::Var(v) => VExpr::Var(ir_var_to_vvar(v)),
-        Arg::Val(n) => VExpr::Const(*n)
+        Arg::Val(n) => VExpr::Const(n.clone())
     }
 }
 
@@ -173,8 +181,7 @@ fn ir_expr_to_vexpr(e: &Expr, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &
                     VExpr::TerExp(TerOp::Select, 
                         Rc::new(VExpr::BinExp(
                             BinOp::EQ,
-                            // TODO: bitwidth?
-                            Rc::new(VExpr::Var(VVar {name: String::from("prev_state"), bits: 32, idx: None})), 
+                            Rc::new(VExpr::Var(cs.prev_state.clone())), 
                             Rc::new(t_label_value.clone())
                         )),
                         Rc::new(ir_arg_to_vexpr(a1)),
@@ -184,7 +191,7 @@ fn ir_expr_to_vexpr(e: &Expr, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &
             }
         },
         Expr::TerExp(op, a1, a2, a3) => VExpr::TerExp(*op, Rc::new(ir_arg_to_vexpr(a1)), Rc::new(ir_arg_to_vexpr(a2)), Rc::new(ir_arg_to_vexpr(a3))),
-        Expr::Copy(Arg::Val(n)) => VExpr::Const(*n),
+        Expr::Copy(Arg::Val(n)) => VExpr::Const(n.clone()),
         Expr::Copy(Arg::Var(v)) => VExpr::Var(ir_var_to_vvar(v))
     }
 }
@@ -226,7 +233,7 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, init_actions:
         // l_done
         conds.push(VExpr::Var(l_done.clone()));
         // l_en <= 0;
-        let disable = VAssign {lhs: l_en.clone(), rhs: VExpr::Const(0)};
+        let disable = VAssign {lhs: l_en.clone(), rhs: VExpr::Const(FALSE)};
         // prev_state <= cur_state
         let prev_assign = VAssign {lhs: cs.prev_state.clone(), rhs: VExpr::Var (cs.cur_state.clone())};
         cs.add_event(all_true(&conds), vec![disable, prev_assign]);
@@ -234,7 +241,7 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, init_actions:
         let mut add_transition = |next_l: &Label, extra_cond: &Option<VExpr>| {
             let next_state = get(&cs.states, next_l).clone();
             let next_en = get(&cs.ens, next_l).clone();
-            let enable = VAssign {lhs: next_en, rhs: VExpr::Const(1)};
+            let enable = VAssign {lhs: next_en, rhs: VExpr::Const(Val {val: 1, type_: Type {bits: 1, signed: false}})};
             let change_cur_state = VAssign {lhs: cs.cur_state.clone(), rhs: next_state.clone()};
             // TODO: add initialization of the next state
             let mut actions = vec![enable, change_cur_state];
@@ -292,25 +299,29 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
     let en = get(&mut cs.ens, l).clone();
     let done = get(&mut cs.dones, l).clone();
 
-    let cnt = cs.new_reg(&format!("{}_cnt", l), 32, None);
-    let mut conds = vec![VExpr::Var(en.clone())];
     let min_time = min_sched_time(dfg);
     let max_time = max_sched_time(dfg);
+    let n_states = max_time - min_time + 1;
     debug!("Generating time between {}..{}", min_time, max_time);
 
-    let init_action = VAssign {lhs: cnt.clone(), rhs: VExpr::Const(min_time)};
+    let nbits = bits_of_states(n_states);
+    let cnt = cs.new_reg(&format!("{}_cnt", l), nbits, None);
+    let mut conds = vec![VExpr::Var(en.clone())];
+    let type_ = Type {bits: nbits, signed: false};
+
+    let init_action = VAssign {lhs: cnt.clone(), rhs: VExpr::Const(Val {val: min_time, type_: type_.clone()})};
 
     let mut sched_stmts = create_stage_stmt_map(dfg);
 
     for i in min_time..=max_time {
         debug!("Generating time {}", i);
-        conds.push(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(i))));
+        conds.push(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(Val {val: i, type_: type_.clone() }))));
         let mut actions = sched_stmts.get(&i).unwrap().iter().map(|stmt|
             compile_stmt_to_vassign(stmt, prevs, cs)
         ).collect::<Vec<_>>();
         // Finalizations
         if i == max_time {
-            actions.push(VAssign {lhs: done.clone(), rhs: VExpr::Const(1) });
+            actions.push(VAssign {lhs: done.clone(), rhs: VExpr::Const(Val {val: 1, type_: Type {bits: 1, signed: false}})});
         }
         cs.add_event(all_true(&conds), actions);
         conds.pop();
@@ -333,11 +344,11 @@ fn is_loop_cond(s: &Stmt) -> bool {
 
 fn rename_with_sched(a: &Arg, i: i32, dfg: &HashMap<Var, DFGNode<Sched>>) -> Arg {
     match a {
-        Arg::Val(n) => Arg::Val(*n),
+        Arg::Val(n) => Arg::Val(n.clone()),
         Arg::Var(v) => {
             match dfg.get(v) {
                 // Operation chaining
-                Some(node) if node.sched.sched == i => Arg::Var(Var { name: format!("{}_wire", v.name) }),
+                Some(node) if node.sched.sched == i => Arg::Var(Var { name: format!("{}_wire", v.name), ..v.clone() }),
                 _ => Arg::Var(v.clone())
             }
         }
@@ -350,6 +361,9 @@ fn ir_expr_to_vexpr_with_sched(e: &Expr, i: i32, is_first: Option<&VVar>, prevs:
             ir_expr_to_vexpr(&Expr::Copy(rename_with_sched(a, i, dfg)), is_first, prevs, cs),
         Expr::UnExp(op, a) =>
             ir_expr_to_vexpr(&Expr::UnExp(*op, rename_with_sched(a, i, dfg)), is_first, prevs, cs),
+        // Because second argument of Mu is loop carried dependency, it must be read from register.
+        Expr::BinExp(BinOp::Mu, a1, a2) =>
+            ir_expr_to_vexpr(&Expr::BinExp(BinOp::Mu, rename_with_sched(a1, i, dfg), a2.clone()), is_first, prevs, cs),
         Expr::BinExp(op, a1, a2) =>
             ir_expr_to_vexpr(&Expr::BinExp(*op, rename_with_sched(a1, i, dfg), rename_with_sched(a2, i, dfg)), is_first, prevs, cs),
         Expr::TerExp(op, a1, a2, a3) =>
@@ -364,22 +378,21 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
     assert!(min_stage == 0);
     let n_stage = max_stage + 1;
     
-    let bits = f64::ceil(f64::log2(f64::from(n_stage))) as i32;
-    debug!("bits: {} {} {}", f64::from(n_stage), f64::log2(f64::from(n_stage)), f64::ceil(f64::log2(f64::from(n_stage))));
+    let nbits = bits_of_states(n_stage);
 
-    let cnt = cs.new_reg(&format!("{}_cnt", l), bits, None);
+    let cnt = cs.new_reg(&format!("{}_cnt", l), nbits, None);
     let stage_en = cs.new_reg(&format!("{}_stage_en", l), 1, Some(max_stage + 1));
     let stage_is_first = cs.new_reg(&format!("{}_stage_is_first", l), 1, Some(max_stage + 1));
     let is_first = cs.new_reg(&format!("{}_is_first", l), 1, None);
     // let is_pipeline_flush = cs.new_reg(format!("{}_pipeline_flush", l), 1, None);
 
     let mut inits = vec![];
-    inits.push(VAssign {lhs: cnt.clone(), rhs: VExpr::Const(0)});
+    inits.push(VAssign {lhs: cnt.clone(), rhs: VExpr::Const(val(0, uint(nbits)))});
     for i in 0..=max_stage {
-        inits.push(VAssign {lhs: VVar {idx: Some(i), ..stage_en.clone()}, rhs: VExpr::Const(0) });
-        inits.push(VAssign {lhs: VVar {idx: Some(i), ..stage_is_first.clone()}, rhs: VExpr::Const(0) });
+        inits.push(VAssign {lhs: VVar {idx: Some(i), ..stage_en.clone()}, rhs: VExpr::Const(FALSE) });
+        inits.push(VAssign {lhs: VVar {idx: Some(i), ..stage_is_first.clone()}, rhs: VExpr::Const(FALSE)});
     }
-    inits.push(VAssign {lhs: is_first.clone(), rhs: VExpr::Const(1)});
+    inits.push(VAssign {lhs: is_first.clone(), rhs: VExpr::Const(TRUE)});
 
     let mut conds = vec![VExpr::Var(get(&cs.ens, l).clone())];
     let sched_stmts = create_stage_stmt_map(dfg);
@@ -396,7 +409,7 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
                 let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&is_first), prevs, cs, dfg);
                 let wire = cs.new_wire(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
                 let loop_cond_reg = cs.new_reg(&format!("{}_loop_cond", l), 1, None);
-                inits.push(VAssign {lhs: loop_cond_reg.clone(), rhs: VExpr::Const(0)});
+                inits.push(VAssign {lhs: loop_cond_reg.clone(), rhs: VExpr::Const(FALSE)});
                 actions.push(VAssign {lhs: loop_cond_reg.clone(), rhs: 
                     VExpr::BinExp(BinOp::And, 
                         Rc::new(VExpr::Var(loop_cond_reg.clone())),
@@ -415,7 +428,7 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
     }
 
     let loop_cond = match loop_conds {
-        None => VExpr::Const(1),
+        None => VExpr::Const(TRUE),
         Some ((i, loop_cond_wire, loop_cond_reg)) => {
             VExpr::BinExp(BinOp::And,
                 Rc::new(VExpr::BinExp(BinOp::Or,
@@ -433,15 +446,15 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
         // cnt <= cnt == max_time ? 0 cnt + 1;
         actions.push(VAssign {lhs: cnt.clone(), rhs: VExpr::TerExp(
             TerOp::Select,
-            Rc::new(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(max_stage)))),
-            Rc::new(VExpr::Const(0)),
-            Rc::new(VExpr::BinExp(BinOp::Plus, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(1)))),
+            Rc::new(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(val(max_stage, uint(nbits)))))),
+            Rc::new(VExpr::Const(val(0, uint(nbits)))),
+            Rc::new(VExpr::BinExp(BinOp::Plus, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(val(1, uint(nbits)))))),
         )});
         // stage_en[0] <= loop_cond && (cnt == 0)
         actions.push(VAssign {lhs: VVar {idx: Some(0), ..stage_en.clone()}, rhs: VExpr::BinExp(
             BinOp::And,
             Rc::new(loop_cond),
-            Rc::new(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(0))))
+            Rc::new(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(val(0, uint(nbits))))))
         )});
         for i in 1..=max_stage {
             // stage_en[i] <= stage_en[i - 1];
@@ -451,12 +464,11 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
         
         {
             // if (cnt == 0) {
-            conds.push(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(0))));
+            conds.push(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(val(0, uint(nbits))))));
             // if (is_first) {
             conds.push(VExpr::Var(is_first.clone()));
             cs.add_event(all_true(&conds), vec![VAssign {
-                lhs: is_first.clone(), rhs: VExpr::Const(0
-            )}]);
+                lhs: is_first.clone(), rhs: VExpr::Const(FALSE)}]);
             // }
             conds.pop();
             cs.add_event(all_true(&conds), vec![VAssign {
@@ -522,48 +534,66 @@ mod tests {
         var_from_str(s)
     }
 
-    fn a(v: Var) -> Arg {
-        Arg::Var(v)
+    fn a(v: &Var) -> Arg {
+        Arg::Var(v.clone())
     }
 
-    fn c(n: i32) -> Arg {
-        Arg::Val(n)
+    fn c(val: Val) -> Arg {
+        Arg::Val(val)
     }
 
-    fn stmt(v: &str, e: Expr) -> Stmt {
-        Stmt {var: Var {name: String::from(v) }, expr: e}
+    fn stmt(v: &Var, e: &Expr) -> Stmt {
+        Stmt {var: v.clone(), expr: e.clone()}
     }
 
     fn s(v: &str) -> String {
         String::from(v)
     }
 
-    fn e(var: Var, d: DepType) -> Edge {
-        Edge {var: var, dep_type: d}
+    fn e(var: &Var, d: DepType) -> Edge {
+        Edge {var: var.clone(), dep_type: d}
     }
     
     #[test]
     fn collatz_sched_cdfg_ir() {
         init();
 
+        let n = Var {name: "n".to_string(), type_: Type {bits: 32, signed: true}};
+
+        let cur0 = Var {name: "cur0".to_string(), type_: Type {bits: 32, signed: true}};
+        let step0 = Var {name: "step0".to_string(), type_: Type {bits: 32, signed: true}};
+        let test0 = Var {name: "test0".to_string(), type_: Type {bits: 1, signed: true}};
+
+        let cur1 = Var {name: "cur1".to_string(), type_: Type {bits: 32, signed: true}};
+        let step1 = Var {name: "step1".to_string(), type_: Type {bits: 32, signed: true}};
+        let tmp1 = Var {name: "tmp1".to_string(), type_: Type {bits: 32, signed: true}};
+        let tmp2 = Var {name: "tmp2".to_string(), type_: Type {bits: 32, signed: true}};
+        let tmp3 = Var {name: "tmp3".to_string(), type_: Type {bits: 32, signed: true}};
+        let tmp4 = Var {name: "tmp4".to_string(), type_: Type {bits: 32, signed: true}};
+        let tmp5 = Var {name: "tmp5".to_string(), type_: Type {bits: 1, signed: true}};
+        let cur2 = Var {name: "cur2".to_string(), type_: Type {bits: 32, signed: true}};
+        let loop_cond = Var {name: "loop_cond".to_string(), type_: Type {bits: 1, signed: true}};
+        let step2 = Var {name: "step2".to_string(), type_: Type {bits: 32, signed: true}};
+        let step = Var {name: "step".to_string(), type_: Type {bits: 32, signed: true}};
+
         let init = {
             let mut dfg = HashMap::<Var, DFGNode<Sched>>::new();
-            dfg.insert(v("cur0"), DFGNode {
-                stmt: stmt("cur0", copy(a(v("n")))),
+            dfg.insert(cur0.clone(), DFGNode {
+                stmt: stmt(&cur0, &copy(a(&n))),
                 prevs: vec![],
-                succs: vec![e(v("cur1"), DepType::InterBB)],
+                succs: vec![e(&cur1, DepType::InterBB)],
                 sched: Sched {sched: 0}
             });
-            dfg.insert(v("step0"), DFGNode {
-                stmt: stmt("step0", copy(c(0))),
+            dfg.insert(step0.clone(), DFGNode {
+                stmt: stmt(&step0, &copy(c(val(0, uint(32))))),
                 prevs: vec![],
-                succs: vec![e(v("step1"), DepType::InterBB)],
+                succs: vec![e(&step1, DepType::InterBB)],
                 sched: Sched {sched: 0}
             });
-            dfg.insert(v("test0"), DFGNode {
-                stmt: stmt("test0", gt(a(v("n")), c(1))),
+            dfg.insert(test0.clone(), DFGNode {
+                stmt: stmt(&test0, &gt(a(&n), c(val(1, uint(32))))),
                 prevs: vec![],
-                succs: vec![e(v("test1"), DepType::InterBB)],
+                succs: vec![],
                 sched: Sched {sched: 0}
             });
 
@@ -577,70 +607,70 @@ mod tests {
 
         let loop_ = {
             let mut dfg = HashMap::<Var, DFGNode<Sched>>::new();
-            dfg.insert(v("cur1"), DFGNode {
-                stmt: stmt("cur1", mu(a(v("cur0")), a(v("cur2")))),
-                prevs: vec![e(v("cur0"), DepType::InterBB), e(v("cur2"), DepType::Carried(1)),],
-                succs: vec![e(v("tmp1"), DepType::Intra), 
-                            e(v("tmp2"), DepType::Intra),
-                            e(v("tmp4"), DepType::Intra),
-                            e(v("test1"), DepType::Intra),],
+            dfg.insert(cur1.clone(), DFGNode {
+                stmt: stmt(&cur1, &mu(a(&cur0), a(&cur2))),
+                prevs: vec![e(&cur0, DepType::InterBB), e(&cur2, DepType::Carried(1)),],
+                succs: vec![e(&tmp1, DepType::Intra), 
+                            e(&tmp2, DepType::Intra),
+                            e(&tmp4, DepType::Intra),
+                            e(&loop_cond, DepType::Intra),],
                 sched: Sched {sched: 0}
             });
-            dfg.insert(v("step1"), DFGNode {
-                stmt: stmt("step1", mu(a(v("step0")), a(v("step2")))),
-                prevs: vec![e(v("step0"), DepType::InterBB), e(v("step2"), DepType::Carried(1)),],
-                succs: vec![e(v("step2"), DepType::Intra),],
+            dfg.insert(step1.clone(), DFGNode {
+                stmt: stmt(&step1, &mu(a(&step0), a(&step2))),
+                prevs: vec![e(&step0, DepType::InterBB), e(&step2, DepType::Carried(1)),],
+                succs: vec![e(&step2, DepType::Intra),],
                 sched: Sched {sched: 0}
             });
-            dfg.insert(v("tmp1"), DFGNode {
-                stmt: stmt("tmp1", div(a(v("cur1")), c(2))),
-                prevs: vec![e(v("cur1"), DepType::Intra)],
-                succs: vec![e(v("cur2"), DepType::Intra),],
+            dfg.insert(tmp1.clone(), DFGNode {
+                stmt: stmt(&tmp1, &div(a(&cur1), c(val(2, int(32))))),
+                prevs: vec![e(&cur1, DepType::Intra)],
+                succs: vec![e(&cur2, DepType::Intra),],
                 sched: Sched {sched: 0}
             });
-            dfg.insert(v("tmp2"), DFGNode {
-                stmt: stmt("tmp2", mult(a(v("cur1")), c(3))),
-                prevs: vec![e(v("cur1"), DepType::Intra)],
-                succs: vec![e(v("tmp3"), DepType::Intra),],
+            dfg.insert(tmp2.clone(), DFGNode {
+                stmt: stmt(&tmp2, &mult(a(&cur1), c(val(3, int(32))))),
+                prevs: vec![e(&cur1, DepType::Intra)],
+                succs: vec![e(&tmp3, DepType::Intra),],
                 sched: Sched {sched: 0}
             });
-            dfg.insert(v("tmp3"), DFGNode {
-                stmt: stmt("tmp3", plus(a(v("tmp2")), c(1))),
-                prevs: vec![e(v("tmp2"), DepType::Intra)],
-                succs: vec![e(v("cur2"), DepType::Intra),],
+            dfg.insert(tmp3.clone(), DFGNode {
+                stmt: stmt(&tmp3, &plus(a(&tmp2), c(val(1, int(32))))),
+                prevs: vec![e(&tmp2, DepType::Intra)],
+                succs: vec![e(&cur2, DepType::Intra),],
                 sched: Sched {sched: 1}
             });
-            dfg.insert(v("tmp4"), DFGNode {
-                stmt: stmt("tmp4", mod_(a(v("cur1")), c(2))),
-                prevs: vec![e(v("cur1"), DepType::Intra)],
-                succs: vec![e(v("tmp5"), DepType::Intra),],
+            dfg.insert(tmp4.clone(), DFGNode {
+                stmt: stmt(&tmp4, &mod_(a(&cur1), c(val(2, int(32))))),
+                prevs: vec![e(&cur1, DepType::Intra)],
+                succs: vec![e(&tmp5, DepType::Intra),],
                 sched: Sched {sched: 0}
             });
-            dfg.insert(v("tmp5"), DFGNode {
-                stmt: stmt("tmp5", eq(a(v("tmp4")), c(0))),
-                prevs: vec![e(v("tmp4"), DepType::Intra)],
-                succs: vec![e(v("cur2"), DepType::Intra),],
+            dfg.insert(tmp5.clone(), DFGNode {
+                stmt: stmt(&tmp5, &eq(a(&tmp4), c(val(0, int(32))))),
+                prevs: vec![e(&tmp4, DepType::Intra)],
+                succs: vec![e(&cur2, DepType::Intra),],
                 sched: Sched {sched: 1}
             });
-            dfg.insert(v("cur2"), DFGNode {
-                stmt: stmt("cur2", select(a(v("tmp5")), a(v("tmp1")), a(v("tmp3")))),
+            dfg.insert(cur2.clone(), DFGNode {
+                stmt: stmt(&cur2, &select(a(&tmp5), a(&tmp1), a(&tmp3))),
                 prevs: vec![
-                    e(v("tmp5"), DepType::Intra), 
-                    e(v("tmp1"), DepType::Intra),
-                    e(v("tmp3"), DepType::Intra)
+                    e(&tmp5, DepType::Intra), 
+                    e(&tmp1, DepType::Intra),
+                    e(&tmp3, DepType::Intra)
                 ],
-                succs: vec![e(v("cur1"), DepType::Carried(1)),],
+                succs: vec![e(&cur1, DepType::Carried(1)),],
                 sched: Sched {sched: 1}
             });
-            dfg.insert(v("step2"), DFGNode {
-                stmt: stmt("step2", plus(a(v("step1")), c(1))),
-                prevs: vec![e(v("step1"), DepType::Intra)],
-                succs: vec![e(v("step1"), DepType::Carried(1)),],
+            dfg.insert(step2.clone(), DFGNode {
+                stmt: stmt(&step2, &plus(a(&step1), c(val(1, int(32))))),
+                prevs: vec![e(&step1, DepType::Intra)],
+                succs: vec![e(&step1, DepType::Carried(1)),],
                 sched: Sched {sched: 0}
             });
-            dfg.insert(v("loop_cond"), DFGNode {
-                stmt: stmt("loop_cond", gt(a(v("cur1")), c(1))),
-                prevs: vec![e(v("cur1"), DepType::Intra)],
+            dfg.insert(loop_cond.clone(), DFGNode {
+                stmt: stmt(&loop_cond, &gt(a(&cur1), c(val(1, int(32))))),
+                prevs: vec![e(&cur1, DepType::Intra)],
                 succs: vec![],
                 sched: Sched {sched: 0}
             });
@@ -654,9 +684,9 @@ mod tests {
 
         let exit = {
             let mut dfg = HashMap::<Var, DFGNode<Sched>>::new();
-            dfg.insert(v("step"), DFGNode {
-                stmt: stmt("step", ita(a(v("step0")), a(v("step2")))),
-                prevs: vec![e(v("step0"), DepType::InterBB), e(v("step0"), DepType::InterBB),],
+            dfg.insert(step.clone(), DFGNode {
+                stmt: stmt(&step, &ita(a(&step0), a(&step2))),
+                prevs: vec![e(&step0, DepType::InterBB), e(&step0, DepType::InterBB),],
                 succs: vec![],
                 sched: Sched {sched: 0}
             });
@@ -677,9 +707,9 @@ mod tests {
         let ir = GenCDFGIR {
             name: String::from("collatz"),
             start: String::from("INIT"),
-            params: vec![Var {name: String::from("n")}],
+            params: vec![Var {name: String::from("n"), type_: int(32)}],
             cdfg,
-            returns: vec![Var {name: String::from("iter")}],
+            returns: vec![Var {name: String::from("step"), type_: int(32)}],
         };
         let ir = compile_sched_cdfg_ir(&ir);
         gen_verilog::generate_verilog_to_file(&ir, "./tmp/collatz.v");

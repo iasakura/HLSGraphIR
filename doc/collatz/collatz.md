@@ -8,7 +8,6 @@ collatz(n) {
         seq {
             cur0 := copy(n);
             step0 := copy(0);
-            test0 := gt(n, 1)
         }
         exit (jc(test0, LOOP, EXIT))
     },
@@ -24,8 +23,7 @@ collatz(n) {
             tmp5 := eq(tmp4, 0);
             cur2 := select(tmp5, tmp1, tmp3);
             step2 := plus(step1, 1);
-            test1 := gt(cur1, 1)
-        } while (test1)
+        } while (gt(cur1, 1))
         exit (jmp(EXIT))
     },
     EXIT {

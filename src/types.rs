@@ -3,17 +3,51 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct Type {
+    pub bits: i32,
+    pub signed: bool,
+}
+
+pub fn int(bits: i32) -> Type {
+    Type {bits, signed: true}
+}
+
+pub fn uint(bits: i32) -> Type {
+    Type {bits, signed: false}
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Var {
     pub name: String,
+    pub type_: Type,
+}
+
+#[derive(Debug, Clone)]
+pub struct Val {
+    pub val: i32,
+    pub type_: Type,
+}
+
+impl fmt::Display for Val {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}'d{}", self.type_.bits, self.val)
+    }
+}
+
+pub fn val(val: i32, type_: Type) -> Val {
+    Val {val, type_}
 }
 
 pub fn var_from_str(s: &str) -> Var {
-    Var { name : String::from(s) }
+    Var { name : String::from(s), type_: int(32) }
 }
 
 pub fn var_from_string(s: String) -> Var {
-    Var { name : s }
+    Var { name : s, type_: int(32) }
 }
+
+pub const TRUE: Val = Val {val: 1, type_: Type {bits: 1, signed: false}};
+pub const FALSE: Val = Val {val: 0, type_: Type {bits: 1, signed: false}};
 
 pub type Label = String;
 pub fn label_from_str(s: &str) -> Label {
@@ -23,7 +57,7 @@ pub fn label_from_str(s: &str) -> Label {
 #[derive(Debug, Clone)]
 pub enum Arg {
     Var(Var),
-    Val(i32)
+    Val(Val)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -293,7 +327,7 @@ pub enum VExpr {
     UnExp(UnOp, Rc<VExpr>),
     BinExp(BinOp, Rc<VExpr>, Rc<VExpr>),
     TerExp(TerOp, Rc<VExpr>, Rc<VExpr>, Rc<VExpr>),
-    Const(i32),
+    Const(Val),
     Var(VVar)
 }
 
