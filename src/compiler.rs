@@ -360,11 +360,12 @@ fn ir_expr_to_vexpr_with_sched(e: &Expr, i: i32, is_first: Option<&VVar>, prevs:
 // Create pipe machine, and returns its initialization actions.
 fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs: &mut CompilerState) -> Vec<VAssign> {
     let min_stage = min_sched_time(dfg);
-    let max_stage = min_sched_time(dfg);
+    let max_stage = max_sched_time(dfg);
     assert!(min_stage == 0);
     let n_stage = max_stage + 1;
     
     let bits = f64::ceil(f64::log2(f64::from(n_stage))) as i32;
+    debug!("bits: {} {} {}", f64::from(n_stage), f64::log2(f64::from(n_stage)), f64::ceil(f64::log2(f64::from(n_stage))));
 
     let cnt = cs.new_reg(&format!("{}_cnt", l), bits, None);
     let stage_en = cs.new_reg(&format!("{}_stage_en", l), 1, Some(max_stage + 1));
