@@ -124,26 +124,30 @@ fn generate_verilog_test() {
     let ir = VerilogIR {
         name: String::from("test_module"),
         localparams: vec![
-            (VVar {name: String::from("CONSTANT"), bits: 1, idx: None }, 42),
+            (vvar("CONSTANT", 1, None), 42),
         ],
         io_signals: vec![
-            (VVar {name: String::from("clk"), bits: 1, idx: None}, IOType::Input), 
-            (VVar {name: String::from("rst_n"), bits: 1, idx: None}, IOType::Input),
-            (VVar {name: String::from("start"), bits: 1, idx: None}, IOType::Input),
-            (VVar {name: String::from("finish"), bits: 1, idx: None}, IOType::OutputReg),
-            (VVar {name: String::from("n"), bits: 32, idx: None}, IOType::Input),
-            (VVar {name: String::from("ret"), bits: 32, idx: None}, IOType::OutputReg)
+            (vvar("clk", 1, None), IOType::Input),
+            (vvar("rst_n", 1, None), IOType::Input),
+            (vvar("start", 1, None), IOType::Input),
+            (vvar("finish", 1, None), IOType::OutputReg),
+            (vvar("n", 32, None), IOType::Input),
+            (vvar("ret", 32, None), IOType::OutputReg)
         ],
-        regs: vec![VVar {name: String::from("a"), bits: 32, idx: Some(3)}, VVar {name: String::from("b"), bits: 64, idx: None}],
-        wires: vec![VAssign {lhs: VVar {name: String::from("c"), bits: 32, idx: None}, rhs: VExpr::BinExp(BinOp::Plus, Rc::new(VExpr::Var(VVar {name: String::from("a"), bits: 32, idx: Some(0)})), Rc::new(VExpr::Const(val(1, int(32)))) )}],
+        regs: vec![
+            vvar("a", 32, Some(3)), 
+            vvar("b", 64, None)
+        ],
+        wires: vec![
+            vassign(vvar("c", 32, None), vplus(vvar("a", 32, Some(0)), val(1, int(32)))
+            )
+        ],
         always: vec![
             VAlways {
-                clk: VVar {name: String::from("clk"), bits: 1, idx: None},
-                cond: VExpr::BinExp(BinOp::LT, 
-                    Rc::new(VExpr::Var(VVar {name: String::from("a"), bits: 32, idx: Some(0)})), 
-                    Rc::new(VExpr::Var(VVar {name: String::from("b"), bits: 32, idx: None}))), 
+                clk: vvar("clk", 1, None),
+                cond: vlt(vvar("a", 32, Some(0)), vvar("b", 32, None)),
                 assigns: vec![
-                    VAssign {lhs: VVar {name: String::from("a"), bits: 32, idx: Some(0)}, rhs: VExpr::Var(VVar {name: String::from("c"), bits: 32, idx: None})},
+                    vassign(vvar("a", 32, Some(0)), vvar("c", 32, None).to_vexpr()),
                 ]
             },
         ]

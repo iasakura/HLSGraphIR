@@ -375,46 +375,167 @@ impl fmt::Display for VVar {
     }
 }
 
+pub fn vvar<T: fmt::Display>(name: T, bits: i32, idx: Option<i32>) -> VVar {
+    VVar {name: name.to_string(), bits, idx}
+}
+
 #[derive(Debug, Clone)]
-pub enum VExpr {
-    UnExp(UnOp, Rc<VExpr>),
-    BinExp(BinOp, Rc<VExpr>, Rc<VExpr>),
-    TerExp(TerOp, Rc<VExpr>, Rc<VExpr>, Rc<VExpr>),
+pub enum VExprE {
+    UnExp(UnOp, VExpr),
+    BinExp(BinOp, VExpr, VExpr),
+    TerExp(TerOp, VExpr, VExpr, VExpr),
     Const(Val),
     Var(VVar)
 }
 
+#[derive(Debug, Clone)]
+pub struct VExpr {
+    expr: Rc<VExprE>
+}
+
 impl fmt::Display for VExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            VExpr::UnExp(op, e) => {
+        match &*self.expr {
+            VExprE::UnExp(op, e) => {
                 match op {
                     UnOp::Neg => write!(f, "-({})", e),
                     UnOp::Not => write!(f, "!({})", e),
                 }
             },
-            VExpr::BinExp(op, e1, e2) => {
+            VExprE::BinExp(op, e1, e2) => {
                 match op {
                     BinOp::Mu => panic!("Mu is not supported in VerilogIR"),
                     BinOp::Ita => panic!("Ita is not supported in VerilogIR"),
                     _ => write!(f, "({} {} {})", e1, op, e2)
                 }
             },
-            VExpr::TerExp(op, e1, e2, e3) => {
+            VExprE::TerExp(op, e1, e2, e3) => {
                 match op {
                     TerOp::Select => write!(f, "({} ? {} : {})", e1, e2, e3)
                 }
             },
-            VExpr::Const(n) => write!(f, "{}", n),
-            VExpr::Var(v) => write!(f, "{}", v)
+            VExprE::Const(n) => write!(f, "{}", n),
+            VExprE::Var(v) => write!(f, "{}", v)
         }
     }
 }
+
+pub trait ToVExpr {
+    fn to_vexpr(self) -> VExpr;
+}
+
+impl ToVExpr for VExpr {
+    fn to_vexpr(self) -> VExpr {
+        self
+    }
+}
+
+impl ToVExpr for &VExpr {
+    fn to_vexpr(self) -> VExpr {
+        VExpr { expr: self.expr.clone() }
+    }
+}
+
+impl ToVExpr for VVar {
+    fn to_vexpr(self) -> VExpr {
+        VExpr { expr: Rc::new(VExprE::Var(self)) }
+    }
+}
+
+impl ToVExpr for &VVar {
+    fn to_vexpr(self) -> VExpr {
+        VExpr { expr: Rc::new(VExprE::Var(self.clone())) }
+    }
+}
+
+impl ToVExpr for Val {
+    fn to_vexpr(self) -> VExpr {
+        VExpr { expr: Rc::new(VExprE::Const(self)) }
+    }
+}
+
+impl ToVExpr for &Val {
+    fn to_vexpr(self) -> VExpr {
+        VExpr { expr: Rc::new(VExprE::Const(self.clone())) }
+    }
+}
+
+pub fn unexp<T1: ToVExpr>(op: UnOp, e1: T1) -> VExpr {
+    VExpr { expr: Rc::new(VExprE::UnExp(op, e1.to_vexpr())) }
+}
+
+pub fn binexp<T1: ToVExpr, T2: ToVExpr>(op: BinOp, e1: T1, e2: T2) -> VExpr {
+    VExpr { expr: Rc::new(VExprE::BinExp(op, e1.to_vexpr(), e2.to_vexpr())) }
+}
+
+pub fn terexp<T1: ToVExpr, T2: ToVExpr, T3: ToVExpr>(op: TerOp, e1: T1, e2: T2, e3: T3) -> VExpr {
+    VExpr { expr: Rc::new(VExprE::TerExp(op, e1.to_vexpr(), e2.to_vexpr(), e3.to_vexpr())) }
+}
+
+macro_rules! gen_vop_def {
+    (unop ( $name: ident, $op:expr ) ) => {
+        pub fn $name<T: ToVExpr>(e: T) -> VExpr {
+            unexp($op, e)
+        }
+    };
+
+    (binop ( $name: ident, $op:expr ) ) => {
+        pub fn $name<T1: ToVExpr, T2: ToVExpr>(e1: T1, e2: T2) -> VExpr {
+            binexp($op, e1, e2)
+        }
+    };
+
+    (terop ( $name: ident, $op:expr ) ) => {
+        pub fn $name<T1: ToVExpr, T2: ToVExpr, T3: ToVExpr>(e1: T1, e2: T2, e3: T3) -> VExpr {
+            terexp($op, e1, e2, e3)
+        }
+    };
+}
+
+gen_vop_def!{unop( vneg, UnOp::Neg )}
+gen_vop_def!{unop( vnot, UnOp::Not )}
+
+gen_vop_def!{binop( vmu, BinOp::Mu )}
+gen_vop_def!{binop( vita, BinOp::Ita )}
+gen_vop_def!{binop( vplus, BinOp::Plus )}
+gen_vop_def!{binop( vminus, BinOp::Minus )}
+gen_vop_def!{binop( vmult, BinOp::Mult )}
+gen_vop_def!{binop( vdiv, BinOp::Div )}
+gen_vop_def!{binop( vmod_, BinOp::Mod )}
+gen_vop_def!{binop( veq, BinOp::EQ )}
+gen_vop_def!{binop( vlt, BinOp::LT )}
+gen_vop_def!{binop( vle, BinOp::LE )}
+gen_vop_def!{binop( vgt, BinOp::GT )}
+gen_vop_def!{binop( vge, BinOp::GE )}
+gen_vop_def!{binop( vand, BinOp::And )}
+gen_vop_def!{binop( vor, BinOp::Or )}
+
+gen_vop_def!{terop( vselect, TerOp::Select )}
 
 #[derive(Debug, Clone)]
 pub struct VAssign {
     pub lhs: VVar,
     pub rhs: VExpr
+}
+
+pub trait ToVVar {
+    fn to_vvar(self) -> VVar;
+}
+
+impl ToVVar for VVar {
+    fn to_vvar(self) -> VVar {
+        self
+    }
+}
+
+impl ToVVar for &VVar {
+    fn to_vvar(self) -> VVar {
+        self.clone()
+    }
+}
+
+pub fn vassign<T1: ToVVar, T2: ToVExpr>(lhs: T1, rhs: T2) -> VAssign {
+    VAssign {lhs: lhs.to_vvar(), rhs: rhs.to_vexpr()}
 }
 
 #[derive(Debug, Clone, Copy)]

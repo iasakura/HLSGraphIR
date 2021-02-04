@@ -20,17 +20,17 @@ fn gen_verilog_io_signals(ir_params: &Vec<Var>, ir_returns: &Vec<Var>, cs: &mut 
         (finish, IOType::OutputReg)
     ];
     let var_list_of_ctrls = ctrl_sigs.iter().map(|(var, type_)| {
-        (VVar {name: String::from(*var), bits: 1, idx: None}, *type_)
+        (vvar(*var, 1, None), *type_)
     });
     let var_list_of_params = ir_params.iter().map(|var| {
-        (VVar {name: var.name.clone(), bits: var.type_.bits, idx: None}, IOType::Input)
+        (vvar(&var.name, var.type_.bits, None), IOType::Input)
     });
     let var_list_of_returns = ir_returns.iter().map(|var| {
-        (VVar {name: var.name.clone(), bits: var.type_.bits, idx: None}, IOType::OutputReg)
+        (vvar(&var.name, var.type_.bits, None), IOType::OutputReg)
     });
     cs.io = var_list_of_ctrls.chain(var_list_of_params).chain(var_list_of_returns).collect::<Vec<_>>();
-    cs.start = VVar {name: String::from(start), bits: 1, idx: None};
-    cs.finish = VVar {name: String::from(finish), bits: 1, idx: None};
+    cs.start = vvar(start, 1, None);
+    cs.finish = vvar(finish, 1, None);
 }
 
 struct CompilerState {
@@ -66,14 +66,15 @@ fn bits_of_states(n: i32) -> i32 {
 
 impl CompilerState {
     fn init(ir: &SchedCDFGIR) -> CompilerState {
-        // Create initial compiler state. Don't forget to update cur_state/prev_state!
+        // Create initial compiler state. 
+        // Don't forget to update cur_state/prev_state!
         let mut cs = CompilerState { 
             io: vec![],
             localparams: vec![], regs: vec![], wires: vec![], always: vec![],
-            cur_state: VVar {name: String::from("dummy"), bits: 0, idx: None},
-            prev_state: VVar {name: String::from("dummy"), bits: 0, idx: None},
-            start: VVar {name: String::from("dummy"), bits: 0, idx: None},
-            finish: VVar {name: String::from("dummy"), bits: 0, idx: None},
+            cur_state: vvar("dummy", 0, None),
+            prev_state: vvar("dummy", 0, None),
+            start: vvar("dummy", 0, None),
+            finish: vvar("dummy", 0, None),
             ens: HashMap::new(), dones: HashMap::new(), states: HashMap::new(),
         };
         gen_verilog_io_signals(&ir.params, &ir.returns, &mut cs);
@@ -97,7 +98,7 @@ impl CompilerState {
                 cs.dones.insert(l.clone(), l_done.clone());
 
                 let var = cs.new_localparam(&format!("{}_ST", l), nbits, cnt);
-                cs.states.insert(l.clone(), VExpr::Var(var));
+                cs.states.insert(l.clone(), var.to_vexpr());
                 cnt += 1;
             }
         }
@@ -114,30 +115,30 @@ impl CompilerState {
     }
 
     fn new_localparam(&mut self, name: &str, bits: i32, v: i32) -> VVar {
-        let var = VVar {name: String::from(name), bits, idx: None};
+        let var = vvar(name, bits, None);
         self.localparams.push((var, v));
         self.localparams.last().unwrap().0.clone()
     }
 
     fn new_reg(&mut self, name: &str, bits: i32, idx: Option<i32>) -> VVar {
         if log_enabled!(Level::Debug) {
-            if let Some(_) =  self.regs.iter().find(|x| x.name == name) {
+            if let Some(_) = self.regs.iter().find(|x| x.name == name) {
                 panic!("{} is already defined.\n", name)
             }
         }
-        let v = VVar {name: String::from(name), bits, idx};
+        let v = vvar(name, bits, idx);
         self.regs.push(v);
         self.regs.last().unwrap().clone()
     }
 
     fn new_wire(&mut self, name: &str, bits: i32, idx: Option<i32>, expr: VExpr) -> VVar {
-        let v = VVar {name: String::from(name), bits, idx};
-        self.wires.push(VAssign { lhs: v, rhs: expr.clone() });
+        let v = vvar(name, bits, idx);
+        self.wires.push(vassign(v, &expr));
         self.wires.last().unwrap().lhs.clone()
     }
 
     fn add_event(&mut self, cond: VExpr, assigns: Vec<VAssign>) {
-        let clk = VVar {name: String::from("clk"), bits: 1, idx: None};
+        let clk = vvar("clk", 1, None);
         self.always.push(VAlways {clk, cond, assigns})
     }
 }
@@ -152,7 +153,7 @@ fn reduce_exprs(es: &Vec<VExpr>, op: BinOp) -> Option<VExpr> {
     } else {
         let mut ret = es[0].clone();
         for e in &es[1..] {
-            ret = VExpr::BinExp(op, Rc::new(ret), Rc::new(e.clone()));
+            ret = binexp(op, ret, e);
         }
         Some(ret)
     }
@@ -166,25 +167,25 @@ fn ir_var_to_vvar(var: &Var) -> VVar {
     VVar {name: var.name.clone(), bits: var.type_.bits, idx: None}
 }
 
+fn var_to_vvar(v: &Var) -> VVar {
+    vvar(&v.name, v.type_.bits, None)
+}
+
 fn ir_arg_to_vexpr(a: &Arg) -> VExpr {
     match a {
-        Arg::Var(v) => VExpr::Var(ir_var_to_vvar(v)),
-        Arg::Val(n) => VExpr::Const(n.clone())
+        Arg::Var(v) => var_to_vvar(v).to_vexpr(),
+        Arg::Val(n) => n.to_vexpr(),
     }
 }
 
 fn ir_expr_to_vexpr(e: &Expr, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &CompilerState) -> VExpr {
     match e {
-        Expr::UnExp(op, a) => VExpr::UnExp(*op, Rc::new(ir_arg_to_vexpr(a))),
+        Expr::UnExp(op, a) => unexp(*op, ir_arg_to_vexpr(a)),
         Expr::BinExp(op, a1, a2) => {
             match op {
                 BinOp::Mu => {
                     if let Some(is_first) = is_first {
-                        VExpr::TerExp(TerOp::Select,
-                            Rc::new(VExpr::Var(is_first.clone())),
-                            Rc::new(ir_arg_to_vexpr(a1)),
-                            Rc::new(ir_arg_to_vexpr(a2)),
-                        )
+                        vselect(is_first, ir_arg_to_vexpr(a1), ir_arg_to_vexpr(a2))
                     } else {
                         panic!("Mu requires is_first");
                     }
@@ -196,26 +197,23 @@ fn ir_expr_to_vexpr(e: &Expr, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &
                     }
                     let t_label = &prevs[0];
                     let t_label_value = get(&cs.states, &t_label);
-                    VExpr::TerExp(TerOp::Select, 
-                        Rc::new(VExpr::BinExp(
-                            BinOp::EQ,
-                            Rc::new(VExpr::Var(cs.prev_state.clone())), 
-                            Rc::new(t_label_value.clone())
-                        )),
-                        Rc::new(ir_arg_to_vexpr(a1)),
-                        Rc::new(ir_arg_to_vexpr(a2)))
+                    vselect(
+                        veq(&cs.prev_state, t_label_value),
+                        ir_arg_to_vexpr(a1),
+                        ir_arg_to_vexpr(a2)
+                    )
                 }
-                _ => VExpr::BinExp(*op, Rc::new(ir_arg_to_vexpr(a1)), Rc::new(ir_arg_to_vexpr(a2))),
+                _ => binexp(*op, ir_arg_to_vexpr(a1), ir_arg_to_vexpr(a2)),
             }
         },
-        Expr::TerExp(op, a1, a2, a3) => VExpr::TerExp(*op, Rc::new(ir_arg_to_vexpr(a1)), Rc::new(ir_arg_to_vexpr(a2)), Rc::new(ir_arg_to_vexpr(a3))),
-        Expr::Copy(Arg::Val(n)) => VExpr::Const(n.clone()),
-        Expr::Copy(Arg::Var(v)) => VExpr::Var(ir_var_to_vvar(v))
+        Expr::TerExp(op, a1, a2, a3) => terexp(*op, ir_arg_to_vexpr(a1), ir_arg_to_vexpr(a2), ir_arg_to_vexpr(a3)),
+        Expr::Copy(Arg::Val(n)) => n.to_vexpr(),
+        Expr::Copy(Arg::Var(v)) => var_to_vvar(v).to_vexpr()
     }
 }
 
 fn make_rst_n() -> VVar {
-    VVar {name: String::from("rst_n"), bits: 1, idx: None}
+    vvar("rst_n", 1, None)
 }
 
 // Create CFG state machine and returs en/done signals 
@@ -223,19 +221,19 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, init_actions:
     // make CFG FSM
     let rst_n = make_rst_n();
 
-    let not_reset = VExpr::Var (rst_n.clone());
-    let reset = VExpr::UnExp(UnOp::Not, Rc::new(VExpr::Var (rst_n.clone())));
+    let not_reset = (&rst_n).to_vexpr();
+    let reset = vnot(&rst_n);
 
     // State machine init
     {
-        let start = ir.start.clone();
+        let start = &ir.start;
         let start_state = get(&cs.states, &start);
         let mut assigns = Vec::<VAssign>::new();
-        assigns.push(VAssign {lhs: cs.cur_state.clone(), rhs: start_state.clone()});
-        assigns.push(VAssign {lhs: cs.prev_state.clone(), rhs: start_state.clone()});
-        let start_en = cs.ens.get(&start).unwrap();
-        assigns.push(VAssign {lhs: start_en.clone(), rhs: VExpr::Const(TRUE)});
-        for a in init_actions.get(&start).unwrap() {
+        assigns.push(vassign(&cs.cur_state, start_state));
+        assigns.push(vassign(&cs.prev_state, start_state));
+        let start_en = cs.ens.get(start).unwrap();
+        assigns.push(vassign(start_en, TRUE));
+        for a in init_actions.get(start).unwrap() {
             assigns.push(a.clone());
         }
         // TODO: Add initialization of ``start'' state
@@ -249,20 +247,20 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, init_actions:
 
         let mut conds = vec![not_reset.clone()];
         // cur_satet == l_state
-        conds.push(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var (cs.cur_state.clone())), Rc::new(l_state.clone())));
+        conds.push(veq(&cs.cur_state, l_state));
         // l_done
-        conds.push(VExpr::Var(l_done.clone()));
+        conds.push(l_done.to_vexpr());
         // l_en <= 0;
-        let disable = VAssign {lhs: l_en.clone(), rhs: VExpr::Const(FALSE)};
+        let disable = vassign(l_en, FALSE);
         // prev_state <= cur_state
-        let prev_assign = VAssign {lhs: cs.prev_state.clone(), rhs: VExpr::Var (cs.cur_state.clone())};
+        let prev_assign = vassign(&cs.prev_state, &cs.cur_state);
         cs.add_event(all_true(&conds), vec![disable, prev_assign]);
         
         let mut add_transition = |next_l: &Label, extra_cond: &Option<VExpr>| {
-            let next_state = get(&cs.states, next_l).clone();
-            let next_en = get(&cs.ens, next_l).clone();
-            let enable = VAssign {lhs: next_en, rhs: VExpr::Const(Val {val: 1, type_: Type {bits: 1, signed: false}})};
-            let change_cur_state = VAssign {lhs: cs.cur_state.clone(), rhs: next_state.clone()};
+            let next_state = get(&cs.states, next_l);
+            let next_en = get(&cs.ens, next_l);
+            let enable = vassign(next_en, TRUE);
+            let change_cur_state = vassign(&cs.cur_state, next_state);
             // TODO: add initialization of the next state
             let mut actions = vec![enable, change_cur_state];
             if let Some(inits) = init_actions.get(next_l) {
@@ -287,8 +285,8 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, init_actions:
                 add_transition(next_l, &None);
             },
             ExitOp::JC(ref cond, ref next_l1, ref next_l2) => {
-                let t_cond = VExpr::Var(ir_var_to_vvar(&cond.clone()));
-                let f_cond = VExpr::UnExp(UnOp::Not, Rc::new(t_cond.clone()));
+                let t_cond = var_to_vvar(&cond.clone()).to_vexpr();
+                let f_cond = vnot(&t_cond);
                 for (l, cond) in vec![(&next_l1, &t_cond), (&next_l2, &f_cond)] {
                     add_transition(l, &Some(cond.clone()));
                 }
@@ -300,8 +298,8 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, init_actions:
     }
 
     let finish_en = cs.ens.get(&FINISH_STATE.to_string()).unwrap().clone();
-    cs.add_event(VExpr::BinExp(BinOp::And, Rc::new(not_reset.clone()), Rc::new(VExpr::Var(finish_en))), vec![
-        VAssign { lhs: cs.finish.clone(), rhs: VExpr::Const(TRUE) }
+    cs.add_event(vand(not_reset.clone(), finish_en), vec![
+        vassign(&cs.finish, TRUE)
     ]);
 }
 
@@ -325,8 +323,7 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
     let done = get(&mut cs.dones, l).clone();
 
     let rst_n = make_rst_n();
-    let not_reset = VExpr::Var (rst_n.clone());
-    let reset = VExpr::UnExp(UnOp::Not, Rc::new(VExpr::Var (rst_n.clone())));
+    let not_reset = (&rst_n).to_vexpr();
 
     let min_time = min_sched_time(dfg);
     let max_time = max_sched_time(dfg);
@@ -335,22 +332,22 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
 
     let nbits = bits_of_states(n_states);
     let cnt = cs.new_reg(&format!("{}_cnt", l), nbits, None);
-    let mut conds = vec![VExpr::Var(make_rst_n()), VExpr::Var(en.clone())];
-    let type_ = Type {bits: nbits, signed: false};
+    let mut conds = vec![not_reset, en.to_vexpr()];
+    let type_ = &Type {bits: nbits, signed: false};
 
-    let init_action = VAssign {lhs: cnt.clone(), rhs: VExpr::Const(Val {val: min_time, type_: type_.clone()})};
+    let init_action = vassign(&cnt, val(min_time, type_.clone()));
 
-    let mut sched_stmts = create_stage_stmt_map(dfg);
+    let sched_stmts = create_stage_stmt_map(dfg);
 
     for i in min_time..=max_time {
         debug!("Generating time {}", i);
-        conds.push(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(Val {val: i, type_: type_.clone() }))));
+        conds.push(veq(&cnt, val(i, type_.clone())));
         let mut actions = sched_stmts.get(&i).unwrap().iter().map(|stmt|
             compile_stmt_to_vassign(stmt, prevs, cs)
         ).collect::<Vec<_>>();
         // Finalizations
         if i == max_time {
-            actions.push(VAssign {lhs: done.clone(), rhs: VExpr::Const(Val {val: 1, type_: Type {bits: 1, signed: false}})});
+            actions.push(vassign(&done, TRUE));
         }
         cs.add_event(all_true(&conds), actions);
         conds.pop();
@@ -390,7 +387,7 @@ fn ir_expr_to_vexpr_with_sched(e: &Expr, i: i32, is_first: Option<&VVar>, prevs:
             ir_expr_to_vexpr(&Expr::Copy(rename_with_sched(a, i, dfg)), is_first, prevs, cs),
         Expr::UnExp(op, a) =>
             ir_expr_to_vexpr(&Expr::UnExp(*op, rename_with_sched(a, i, dfg)), is_first, prevs, cs),
-        // Because second argument of Mu is loop carried dependency, it must be read from register.
+        // Because second argument of Mu is loop carried dependency, the arg must be read from register.
         Expr::BinExp(BinOp::Mu, a1, a2) =>
             ir_expr_to_vexpr(&Expr::BinExp(BinOp::Mu, rename_with_sched(a1, i, dfg), a2.clone()), is_first, prevs, cs),
         Expr::BinExp(op, a1, a2) =>
@@ -398,6 +395,11 @@ fn ir_expr_to_vexpr_with_sched(e: &Expr, i: i32, is_first: Option<&VVar>, prevs:
         Expr::TerExp(op, a1, a2, a3) =>
             ir_expr_to_vexpr(&Expr::TerExp(*op, rename_with_sched(a1, i, dfg), rename_with_sched(a2, i, dfg), rename_with_sched(a3, i, dfg)), is_first, prevs, cs),
     }
+}
+
+fn varr_at<T: ToVVar>(arr: T, idx: i32) -> VVar {
+    let v = arr.to_vvar();
+    vvar(v.name, v.bits, Some(idx))
 }
 
 // Create pipe machine, and returns its initialization actions.
@@ -414,40 +416,36 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
     // let is_pipeline_flush = cs.new_reg(format!("{}_pipeline_flush", l), 1, None);
 
     let mut inits = vec![];
-    inits.push(VAssign {lhs: cnt.clone(), rhs: VExpr::Const(val(0, uint(ii_nbits)))});
+    inits.push(vassign(cnt.clone(), val(0, uint(ii_nbits))));
     for i in 0..=max_stage {
-        inits.push(VAssign {lhs: VVar {idx: Some(i), ..stage_en.clone()}, rhs: VExpr::Const(FALSE) });
-        inits.push(VAssign {lhs: VVar {idx: Some(i), ..stage_is_first.clone()}, rhs: VExpr::Const(FALSE)});
+        inits.push(vassign(varr_at(&stage_en, i), FALSE));
     }
-    inits.push(VAssign {lhs: is_first.clone(), rhs: VExpr::Const(TRUE)});
+    inits.push(vassign(&is_first, TRUE));
+    
+    let rst_n = &make_rst_n();
 
-    let mut conds = vec![VExpr::Var(make_rst_n()), VExpr::Var(get(&cs.ens, l).clone())];
+    let mut conds = vec![rst_n.to_vexpr(), get(&cs.ens, l).to_vexpr()];
     let sched_stmts = create_stage_stmt_map(dfg);
 
     // stage, cond_wire (no delay), cond_reg (1cycle delay & remains false one cond_wire becomes false)
     let mut loop_conds: Option<(i32, VVar, VVar)> = None;
     // Generate datapath
     for (i, ss) in sched_stmts {
-        conds.push(VExpr::Var (VVar {idx: Some(i), ..stage_en.clone()}));
+        conds.push(varr_at(&stage_en, i).to_vexpr());
         let mut actions = vec![];
         for s in ss {
             let var = ir_var_to_vvar(&s.var);
             if is_loop_cond(s) {
-                let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&VVar {idx: Some(i), ..stage_is_first.clone()}), prevs, cs, dfg);
+                let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&varr_at(&stage_is_first, i)), prevs, cs, dfg);
                 let wire = cs.new_wire(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
                 let loop_cond_reg = cs.new_reg(&format!("{}_loop_cond", l), 1, None);
-                inits.push(VAssign {lhs: loop_cond_reg.clone(), rhs: VExpr::Const(TRUE)});
-                actions.push(VAssign {lhs: loop_cond_reg.clone(), rhs: 
-                    VExpr::BinExp(BinOp::And, 
-                        Rc::new(VExpr::Var(loop_cond_reg.clone())),
-                        Rc::new(VExpr::Var(wire.clone()))
-                    )
-                });
-                loop_conds = Some((i, wire, loop_cond_reg));
+                inits.push(vassign(&loop_cond_reg, TRUE));
+                actions.push(vassign(&loop_cond_reg, vand(&loop_cond_reg, &wire)));
+                loop_conds = Some((i, wire.clone(), loop_cond_reg.clone()));
             } else {
-                let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&&VVar {idx: Some(i), ..stage_is_first.clone()}), prevs, cs, dfg);
+                let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&varr_at(&stage_is_first, i)), prevs, cs, dfg);
                 let wire = cs.new_wire(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
-                actions.push(VAssign { lhs: var, rhs: VExpr::Var (wire) })
+                actions.push(vassign(var, wire));
             }
         }
         cs.add_event(all_true(&conds), actions);
@@ -455,14 +453,9 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
     }
 
     let loop_cond = match &loop_conds {
-        None => VExpr::Const(TRUE),
+        None => TRUE.to_vexpr(),
         Some ((i, loop_cond_wire, loop_cond_reg)) => {
-            VExpr::BinExp(BinOp::And,
-                Rc::new(VExpr::BinExp(BinOp::Or,
-                    Rc::new(VExpr::UnExp(UnOp::Not,
-                        Rc::new(VExpr::Var(VVar {idx: Some(*i), ..stage_en.clone()})))),
-                    Rc::new(VExpr::Var(loop_cond_wire.clone())))),
-                Rc::new(VExpr::Var(loop_cond_reg.clone())))
+            vand(vor(vnot(varr_at(&stage_en, *i)), loop_cond_wire), loop_cond_reg)
         }
     };
 
@@ -471,71 +464,47 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
     {
         let mut actions = vec![];
         // cnt <= cnt == ii ? 0 cnt + 1;
-        actions.push(VAssign {lhs: cnt.clone(), rhs: VExpr::TerExp(
-            TerOp::Select,
-            Rc::new(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(val(ii - 1, uint(ii_nbits)))))),
-            Rc::new(VExpr::Const(val(0, uint(ii_nbits)))),
-            Rc::new(VExpr::BinExp(BinOp::Plus, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(val(1, uint(ii_nbits)))))),
-        )});
+        actions.push(vassign(&cnt, vselect(
+            veq(&cnt, val(ii-1, uint(ii_nbits))),
+            val(0, uint(ii_nbits)),
+            vplus(&cnt, val(1, uint(ii_nbits)))
+        )));
         // stage_en[0] <= loop_cond && (cnt == 0)
-        actions.push(VAssign {lhs: VVar {idx: Some(0), ..stage_en.clone()}, rhs: VExpr::BinExp(
-            BinOp::And,
-            Rc::new(loop_cond),
-            Rc::new(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(val(0, uint(ii_nbits))))))
-        )});
+        actions.push(vassign(varr_at(&stage_en, 0), vand(loop_cond, veq(&cnt, val(0, uint(ii_nbits))))));
         for i in 1..=max_stage {
             // stage_en[i] <= stage_en[i - 1];
-            actions.push(VAssign {lhs: VVar {idx: Some(i), ..stage_en.clone()}, rhs: VExpr::Var( VVar {idx: Some(i - 1), ..stage_en.clone()})});
+            actions.push(vassign(varr_at(&stage_en, i), varr_at(&stage_en, i - 1)));
         }
         cs.add_event(all_true(&conds), actions);
         
         {
             // if (cnt == 0) {
-            conds.push(VExpr::BinExp(BinOp::EQ, Rc::new(VExpr::Var(cnt.clone())), Rc::new(VExpr::Const(val(0, uint(ii_nbits))))));
+            conds.push(veq(&cnt, val(0, uint(ii_nbits))));
             // if (is_first) {
-            conds.push(VExpr::Var(is_first.clone()));
-            cs.add_event(all_true(&conds), vec![VAssign {
-                lhs: is_first.clone(), rhs: VExpr::Const(FALSE)}]);
+            conds.push((&is_first).to_vexpr());
+            cs.add_event(all_true(&conds), vec![vassign(&is_first, FALSE)]);
             // }
             conds.pop();
-            cs.add_event(all_true(&conds), vec![VAssign {
-                lhs: VVar {idx: Some(0), ..stage_is_first.clone()}, 
-                rhs: VExpr::Var(is_first.clone())
-            }]);
+            cs.add_event(all_true(&conds), vec![vassign(varr_at(&stage_is_first, 0), &is_first)]);
             // }
             conds.pop();
             for i in 1..=max_stage {
-                cs.add_event(all_true(&conds), vec![VAssign {
-                    lhs: VVar {idx: Some(i), ..stage_is_first.clone()},
-                    rhs: VExpr::Var(VVar {idx: Some(i - 1), ..stage_is_first.clone()})
-                }])
+                cs.add_event(all_true(&conds), vec![vassign(
+                    varr_at(&stage_is_first, i),
+                    varr_at(&stage_is_first, i - 1)
+                )])
             }
         }
 
         if let Some((_, _, loop_cond_reg)) = loop_conds {
-            let stage_all_disabled_expr = all_true(&(min_stage..=max_stage).map(|i| { 
-                VExpr::UnExp(
-                    UnOp::Not,
-                    Rc::new(VExpr::Var(VVar { idx: Some(i), ..stage_is_first.clone() }))
-                )
-            }).collect::<Vec<_>>());
+            let stage_all_disabled_expr = all_true(&(min_stage..=max_stage).map(|i| 
+                vnot(varr_at(&stage_is_first, i))
+            ).collect::<Vec<_>>());
             let stage_all_disabled = cs.new_wire(&format!("{}_stage_all_disabled", l), 1, None, stage_all_disabled_expr);
-            cs.add_event(all_true(&conds), vec![VAssign {
-                lhs: get(&cs.dones, l).clone(),
-                rhs: VExpr::BinExp(BinOp::And,
-                    Rc::new(VExpr::UnExp(
-                        UnOp::Not,
-                        Rc::new(VExpr::Var(is_first)))),
-                    Rc::new(VExpr::BinExp(
-                        BinOp::And,
-                        Rc::new(VExpr::UnExp(
-                            UnOp::Not,
-                            Rc::new(VExpr::Var(loop_cond_reg)),
-                        )),
-                        Rc::new(VExpr::Var(stage_all_disabled)),
-                    ))
-                )
-            }]);
+            cs.add_event(all_true(&conds), vec![vassign (
+                get(&cs.dones, l),
+                vand(vnot(&is_first), vand(vnot(loop_cond_reg), stage_all_disabled))
+            )]);
         }
     }
 
@@ -586,24 +555,8 @@ mod tests {
     use super::*;
     use crate::gen_verilog;
 
-    fn v(s: &str) -> Var {
-        var(s, int(32))
-    }
-
-    fn a(v: &Var) -> Arg {
-        Arg::Var(v.clone())
-    }
-
-    fn c(val: Val) -> Arg {
-        Arg::Val(val)
-    }
-
     fn s(v: &str) -> String {
         String::from(v)
-    }
-
-    fn e(var: &Var, d: DepType) -> Edge {
-        Edge {var: var.clone(), dep_type: d}
     }
     
     #[test]
@@ -674,6 +627,6 @@ mod tests {
             returns: vec![Var {name: String::from("step"), type_: int(32)}],
         };
         let ir = compile_sched_cdfg_ir(&ir);
-        gen_verilog::generate_verilog_to_file(&ir, "./tmp/collatz.v");
+        gen_verilog::generate_verilog_to_file(&ir, "./test/collatz.v");
     }
 }
