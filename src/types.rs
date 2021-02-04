@@ -22,6 +22,11 @@ pub struct Var {
     pub type_: Type,
 }
 
+pub fn var<T: fmt::Display>(name: T, type_: Type) -> Var {
+    let name = name.to_string();
+    Var {name, type_}
+}
+
 #[derive(Debug, Clone)]
 pub struct Val {
     pub val: i32,
@@ -38,20 +43,12 @@ pub fn val(val: i32, type_: Type) -> Val {
     Val {val, type_}
 }
 
-pub fn var_from_str(s: &str) -> Var {
-    Var { name : String::from(s), type_: int(32) }
-}
-
-pub fn var_from_string(s: String) -> Var {
-    Var { name : s, type_: int(32) }
-}
-
 pub const TRUE: Val = Val {val: 1, type_: Type {bits: 1, signed: false}};
 pub const FALSE: Val = Val {val: 0, type_: Type {bits: 1, signed: false}};
 
 pub type Label = String;
-pub fn label_from_str(s: &str) -> Label {
-    String::from(s)
+pub fn label(s: &str) -> Label {
+    s.to_string()
 }
 
 #[derive(Debug, Clone)]
@@ -118,7 +115,7 @@ impl fmt::Display for BinOp {
             BinOp::And => write!(f, "&&"),
             BinOp::Or => write!(f, "||"),
 
-            BinOp::Mu => write!(f, "MU"),
+            BinOp::Mu => write!(f, "Mu"),
             BinOp::Ita => write!(f, "Ita")
         }
     }
@@ -137,70 +134,100 @@ pub enum Expr {
     TerExp (TerOp, Arg, Arg, Arg)
 }
 
-pub fn copy(a : Arg) -> Expr {
-    Expr::Copy (a)
+pub trait ToArg {
+    fn to_arg(self) -> Arg;
 }
 
-pub fn neg(a : Arg) -> Expr {
-    Expr::UnExp(UnOp::Neg, a)
+impl ToArg for Var {
+    fn to_arg(self) -> Arg {
+        Arg::Var(self.clone())
+    }
 }
 
-pub fn mu(a1 : Arg, a2 : Arg) -> Expr {
-    Expr::BinExp(BinOp::Mu, a1, a2)
+impl ToArg for &Var {
+    fn to_arg(self) -> Arg {
+        Arg::Var(self.clone())
+    }
 }
 
-pub fn ita(a1 : Arg, a2 : Arg) -> Expr {
-    Expr::BinExp(BinOp::Ita, a1, a2)
+impl ToArg for Val {
+    fn to_arg(self) -> Arg {
+        Arg::Val(self.clone())
+    }
 }
 
-pub fn plus(a1 : Arg, a2 : Arg) -> Expr {
-    Expr::BinExp(BinOp::Plus, a1, a2)
+impl ToArg for &Val {
+    fn to_arg(self) -> Arg {
+        Arg::Val(self.clone())
+    }
 }
 
-pub fn minus(a1 : Arg, a2 : Arg) -> Expr {
-    Expr::BinExp(BinOp::Minus, a1, a2)
+macro_rules! gen_op_def {
+    (unop ( $name: ident, $op:expr ) ) => {
+        pub fn $name<T: ToArg>(a: T) -> Expr {
+            Expr::UnExp($op, a.to_arg())
+        }
+    };
+
+    (binop ( $name: ident, $op: expr) ) => {
+        pub fn $name<T1: ToArg, T2: ToArg>(a1: T1, a2: T2) -> Expr {
+            Expr::BinExp($op, a1.to_arg(), a2.to_arg())
+        }
+    };
+    
+    (terop ( $name: ident, $op: expr) ) => {
+        pub fn $name<T1: ToArg, T2: ToArg, T3: ToArg>(a1: T1, a2: T2, a3: T3) -> Expr {
+            Expr::TerExp($op, a1.to_arg(), a2.to_arg(), a3.to_arg())
+        }
+    }
 }
 
-pub fn mult(a1 : Arg, a2 : Arg) -> Expr {
-    Expr::BinExp(BinOp::Mult, a1, a2)
+pub fn copy<T: ToArg>(a: T) -> Expr {
+    Expr::Copy (a.to_arg())
 }
 
-pub fn div(a1 : Arg, a2 : Arg) -> Expr {
-    Expr::BinExp(BinOp::Div, a1, a2)
-}
+gen_op_def!{unop( neg, UnOp::Neg )}
+gen_op_def!{unop( not, UnOp::Not )}
 
-pub fn mod_(a1 : Arg, a2 : Arg) -> Expr {
-    Expr::BinExp(BinOp::Mod, a1, a2)
-}
+gen_op_def!{binop( mu, BinOp::Mu )}
+gen_op_def!{binop( ita, BinOp::Ita )}
+gen_op_def!{binop( plus, BinOp::Plus )}
+gen_op_def!{binop( minus, BinOp::Minus )}
+gen_op_def!{binop( mult, BinOp::Mult )}
+gen_op_def!{binop( div, BinOp::Div )}
+gen_op_def!{binop( mod_, BinOp::Mod )}
+gen_op_def!{binop( eq, BinOp::EQ )}
+gen_op_def!{binop( lt, BinOp::LT )}
+gen_op_def!{binop( le, BinOp::LE )}
+gen_op_def!{binop( gt, BinOp::GT )}
+gen_op_def!{binop( ge, BinOp::GE )}
 
-pub fn eq(a1 : Arg, a2 : Arg) -> Expr {
-    Expr::BinExp(BinOp::EQ, a1, a2)
-}
-
-pub fn lt(a1 : Arg, a2 : Arg) -> Expr {
-    Expr::BinExp(BinOp::LT, a1, a2)
-}
-
-pub fn le(a1 : Arg, a2 : Arg) -> Expr {
-    Expr::BinExp(BinOp::LE, a1, a2)
-}
-
-pub fn gt(a1 : Arg, a2 : Arg) -> Expr {
-    Expr::BinExp(BinOp::GT, a1, a2)
-}
-
-pub fn ge(a1 : Arg, a2 : Arg) -> Expr {
-    Expr::BinExp(BinOp::GE, a1, a2)
-}
-
-pub fn select(a1 : Arg, a2 : Arg, a3: Arg) -> Expr {
-    Expr::TerExp(TerOp::Select, a1, a2, a3)
-}
+gen_op_def!{terop( select, TerOp::Select )}
 
 #[derive(Debug, Clone)]
 pub struct Stmt {
     pub var: Var,
     pub expr: Expr,
+}
+
+pub trait ToExpr {
+    fn to_expr(self) -> Expr;
+}
+
+impl ToExpr for Expr {
+    fn to_expr(self) -> Expr {
+        self.clone()
+    }
+}
+
+impl ToExpr for &Expr {
+    fn to_expr(self) -> Expr {
+        self.clone()
+    }
+}
+
+pub fn stmt<T: ToExpr>(v: &Var, e: T) -> Stmt {
+    Stmt {var: v.clone(), expr: e.to_expr()}
 }
 
 #[derive(Debug)]
@@ -210,8 +237,8 @@ pub enum ExitOp {
     RET
 }
 
-pub fn jc(cond: Var, label1: Label, label2: Label) -> ExitOp {
-    ExitOp::JC(cond, label1, label2)
+pub fn jc(var: &Var, l1: Label, l2: Label) -> ExitOp {
+    ExitOp::JC(var.clone(), l1, l2)
 }
 
 pub fn jmp(label: Label) -> ExitOp {
@@ -265,12 +292,34 @@ pub struct Edge {
 #[derive(Debug)]
 pub struct DFGNode<SCHED> {
     pub stmt: Stmt,
-    pub prevs: Vec<Edge>,
-    pub succs: Vec<Edge>,
+    // pub prevs: Vec<Edge>,
+    // pub succs: Vec<Edge>,
     pub sched: SCHED,
 }
 
 pub type DFG<SCHED> = HashMap<Var, DFGNode<SCHED>>;
+
+pub fn to_dfg<SCHED>(nodes: Vec<(Stmt, SCHED)>) -> DFG<SCHED> {
+    let mut ret = HashMap::new();
+    for (stmt, sched) in nodes { 
+        ret.insert(stmt.var.clone(), DFGNode {stmt, sched});
+    }
+    ret
+}
+
+#[macro_export]
+macro_rules! dfg {
+    ( $( $v:ident <- $e:expr, $i:expr ; )* ) => {
+        crate::types::to_dfg(vec![
+            $( (stmt($v, $e), sched($i)) ),*
+        ])
+    };
+    ( $( $v:ident <- $e:expr; )* ) => {
+        crate::types::to_dfg(vec![
+            $(stmt($v, $e), ()),*
+        ])
+    };
+}
 
 #[derive(Debug)]
 pub enum DFGBBBody<SCHED, II> {
@@ -300,6 +349,10 @@ pub struct GenCDFGIR<SCHED: fmt::Debug, II: fmt::Debug> {
 #[derive(Debug)]
 pub struct Sched {
     pub sched: i32,
+}
+
+pub fn sched(s: i32) -> Sched {
+    Sched {sched: s}
 }
 
 pub type CDFGIR = GenCDFGIR<(), ()>;

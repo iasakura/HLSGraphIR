@@ -1,4 +1,5 @@
 use crate::types::*;
+use crate::dfg;
 
 use std::cmp;
 use std::collections::HashMap;
@@ -586,7 +587,7 @@ mod tests {
     use crate::gen_verilog;
 
     fn v(s: &str) -> Var {
-        var_from_str(s)
+        var(s, int(32))
     }
 
     fn a(v: &Var) -> Arg {
@@ -595,10 +596,6 @@ mod tests {
 
     fn c(val: Val) -> Arg {
         Arg::Val(val)
-    }
-
-    fn stmt(v: &Var, e: &Expr) -> Stmt {
-        Stmt {var: v.clone(), expr: e.clone()}
     }
 
     fn s(v: &str) -> String {
@@ -613,150 +610,60 @@ mod tests {
     fn collatz_sched_cdfg_ir() {
         init();
 
-        let n = Var {name: "n".to_string(), type_: Type {bits: 32, signed: true}};
+        let n = &var("n", int(32));
+        let cur0 = &var("cur0", int(32));
+        let step0 = &var("step0", int(32));
+        let test0 = &var("test0", uint(1));
 
-        let cur0 = Var {name: "cur0".to_string(), type_: Type {bits: 32, signed: true}};
-        let step0 = Var {name: "step0".to_string(), type_: Type {bits: 32, signed: true}};
-        let test0 = Var {name: "test0".to_string(), type_: Type {bits: 1, signed: true}};
+        let cur1 = &var("cur1", int(32));
+        let step1 = &var("step1", int(32));
+        let tmp1 = &var("tmp1", int(32));
+        let tmp2 = &var("tmp2", int(32));
+        let tmp3 = &var("tmp3", int(32));
+        let tmp4 = &var("tmp4", int(32));
+        let tmp5 = &var("tmp5", int(1));
+        let cur2 = &var("cur2", int(32));
+        let loop_cond = &var("loop_cond", uint(1));
+        let step2 = &var("step2", int(32));
 
-        let cur1 = Var {name: "cur1".to_string(), type_: Type {bits: 32, signed: true}};
-        let step1 = Var {name: "step1".to_string(), type_: Type {bits: 32, signed: true}};
-        let tmp1 = Var {name: "tmp1".to_string(), type_: Type {bits: 32, signed: true}};
-        let tmp2 = Var {name: "tmp2".to_string(), type_: Type {bits: 32, signed: true}};
-        let tmp3 = Var {name: "tmp3".to_string(), type_: Type {bits: 32, signed: true}};
-        let tmp4 = Var {name: "tmp4".to_string(), type_: Type {bits: 32, signed: true}};
-        let tmp5 = Var {name: "tmp5".to_string(), type_: Type {bits: 1, signed: true}};
-        let cur2 = Var {name: "cur2".to_string(), type_: Type {bits: 32, signed: true}};
-        let loop_cond = Var {name: "loop_cond".to_string(), type_: Type {bits: 1, signed: true}};
-        let step2 = Var {name: "step2".to_string(), type_: Type {bits: 32, signed: true}};
-        let step = Var {name: "step".to_string(), type_: Type {bits: 32, signed: true}};
+        let step = &var("step", int(32));
 
-        let init = {
-            let mut dfg = HashMap::<Var, DFGNode<Sched>>::new();
-            dfg.insert(cur0.clone(), DFGNode {
-                stmt: stmt(&cur0, &copy(a(&n))),
-                prevs: vec![],
-                succs: vec![e(&cur1, DepType::InterBB)],
-                sched: Sched {sched: 0}
-            });
-            dfg.insert(step0.clone(), DFGNode {
-                stmt: stmt(&step0, &copy(c(val(0, uint(32))))),
-                prevs: vec![],
-                succs: vec![e(&step1, DepType::InterBB)],
-                sched: Sched {sched: 0}
-            });
-            dfg.insert(test0.clone(), DFGNode {
-                stmt: stmt(&test0, &gt(a(&n), c(val(1, uint(32))))),
-                prevs: vec![],
-                succs: vec![],
-                sched: Sched {sched: 0}
-            });
+        let init = (s("INIT"), DFGBB {
+            prevs: vec![],
+            body: DFGBBBody::Seq(dfg!{
+                cur0 <- copy(n), 0;
+                step0 <- copy(val(0, uint(32))), 0;
+                test0 <- gt(n, val(1, uint(32))), 0;
+            }),
+            exit: jc(test0, label("LOOP"), label("EXIT")),
+        });
 
-            let body = DFGBBBody::Seq(dfg);
-            DFGBB {
-                prevs: vec![],
-                body,
-                exit: ExitOp::JC(var_from_str("test0"), label_from_str("LOOP"), label_from_str("EXIT")),
-            }
-        };
+        let loop_ = (s("LOOP"), DFGBB {
+            prevs: vec![s("INIT")],
+            body: DFGBBBody::Pipe(dfg!{
+                cur1 <- mu(cur0, cur2), 0;
+                step1 <- mu(step0, step2), 0;
+                tmp1 <- div(cur1, val(2, int(32))), 0;
+                tmp2 <- mult(cur1, val(3, int(32))), 0;
+                tmp3 <- plus(tmp2, val(1, int(32))), 1;
+                tmp4 <- mod_(cur1, val(2, int(32))), 0;
+                tmp5 <- eq(tmp4, val(0, int(32))), 1;
+                cur2 <- select(tmp5, tmp1, tmp3), 1;
+                step2 <- plus(step1, val(1, int(32))), 1;
+                loop_cond <- gt(cur1, val(1, int(32))), 0;
+            }, 2),            
+            exit: ExitOp::JMP(s("EXIT")),
+        });
 
-        let loop_ = {
-            let mut dfg = HashMap::<Var, DFGNode<Sched>>::new();
-            dfg.insert(cur1.clone(), DFGNode {
-                stmt: stmt(&cur1, &mu(a(&cur0), a(&cur2))),
-                prevs: vec![e(&cur0, DepType::InterBB), e(&cur2, DepType::Carried(1)),],
-                succs: vec![e(&tmp1, DepType::Intra), 
-                            e(&tmp2, DepType::Intra),
-                            e(&tmp4, DepType::Intra),
-                            e(&loop_cond, DepType::Intra),],
-                sched: Sched {sched: 0}
-            });
-            dfg.insert(step1.clone(), DFGNode {
-                stmt: stmt(&step1, &mu(a(&step0), a(&step2))),
-                prevs: vec![e(&step0, DepType::InterBB), e(&step2, DepType::Carried(1)),],
-                succs: vec![e(&step2, DepType::Intra),],
-                sched: Sched {sched: 0}
-            });
-            dfg.insert(tmp1.clone(), DFGNode {
-                stmt: stmt(&tmp1, &div(a(&cur1), c(val(2, int(32))))),
-                prevs: vec![e(&cur1, DepType::Intra)],
-                succs: vec![e(&cur2, DepType::Intra),],
-                sched: Sched {sched: 0}
-            });
-            dfg.insert(tmp2.clone(), DFGNode {
-                stmt: stmt(&tmp2, &mult(a(&cur1), c(val(3, int(32))))),
-                prevs: vec![e(&cur1, DepType::Intra)],
-                succs: vec![e(&tmp3, DepType::Intra),],
-                sched: Sched {sched: 0}
-            });
-            dfg.insert(tmp3.clone(), DFGNode {
-                stmt: stmt(&tmp3, &plus(a(&tmp2), c(val(1, int(32))))),
-                prevs: vec![e(&tmp2, DepType::Intra)],
-                succs: vec![e(&cur2, DepType::Intra),],
-                sched: Sched {sched: 1}
-            });
-            dfg.insert(tmp4.clone(), DFGNode {
-                stmt: stmt(&tmp4, &mod_(a(&cur1), c(val(2, int(32))))),
-                prevs: vec![e(&cur1, DepType::Intra)],
-                succs: vec![e(&tmp5, DepType::Intra),],
-                sched: Sched {sched: 0}
-            });
-            dfg.insert(tmp5.clone(), DFGNode {
-                stmt: stmt(&tmp5, &eq(a(&tmp4), c(val(0, int(32))))),
-                prevs: vec![e(&tmp4, DepType::Intra)],
-                succs: vec![e(&cur2, DepType::Intra),],
-                sched: Sched {sched: 1}
-            });
-            dfg.insert(cur2.clone(), DFGNode {
-                stmt: stmt(&cur2, &select(a(&tmp5), a(&tmp1), a(&tmp3))),
-                prevs: vec![
-                    e(&tmp5, DepType::Intra), 
-                    e(&tmp1, DepType::Intra),
-                    e(&tmp3, DepType::Intra)
-                ],
-                succs: vec![e(&cur1, DepType::Carried(1)),],
-                sched: Sched {sched: 1}
-            });
-            dfg.insert(step2.clone(), DFGNode {
-                stmt: stmt(&step2, &plus(a(&step1), c(val(1, int(32))))),
-                prevs: vec![e(&step1, DepType::Intra)],
-                succs: vec![e(&step1, DepType::Carried(1)),],
-                sched: Sched {sched: 0}
-            });
-            dfg.insert(loop_cond.clone(), DFGNode {
-                stmt: stmt(&loop_cond, &gt(a(&cur1), c(val(1, int(32))))),
-                prevs: vec![e(&cur1, DepType::Intra)],
-                succs: vec![],
-                sched: Sched {sched: 0}
-            });
-            let body = DFGBBBody::Pipe(dfg, 2);
-            DFGBB {
-                prevs: vec![s("INIT")],
-                body,
-                exit: ExitOp::JMP(s("EXIT")),
-            }
-        };
+        let exit = (s("EXIT"), DFGBB {
+            prevs: vec![s("INIT"), s("LOOP")],
+            body: DFGBBBody::Seq(dfg!{
+                step <- ita(step0, step2), 0;
+            }),
+            exit: ExitOp::RET,
+        });
 
-        let exit = {
-            let mut dfg = HashMap::<Var, DFGNode<Sched>>::new();
-            dfg.insert(step.clone(), DFGNode {
-                stmt: stmt(&step, &ita(a(&step0), a(&step2))),
-                prevs: vec![e(&step0, DepType::InterBB), e(&step0, DepType::InterBB),],
-                succs: vec![],
-                sched: Sched {sched: 0}
-            });
-            let body = DFGBBBody::Seq(dfg);
-            DFGBB {
-                prevs: vec![s("INIT"), s("LOOP")],
-                body,
-                exit: ExitOp::RET,
-            }
-        };
-
-        let mut cdfg: HashMap<Label, DFGBB<Sched, i32>> = HashMap::new();
-        cdfg.insert(String::from("INIT"), init);
-        cdfg.insert(String::from("LOOP"), loop_);
-        cdfg.insert(String::from("EXIT"), exit);
+        let cdfg = vec![init, loop_, exit].into_iter().collect::<HashMap<_, _>>();
 
 
         let ir = GenCDFGIR {
