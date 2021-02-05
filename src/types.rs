@@ -230,6 +230,53 @@ pub fn stmt<T: ToExpr>(v: &Var, e: T) -> Stmt {
     Stmt {var: v.clone(), expr: e.to_expr()}
 }
 
+fn get_var_of_arg(a: &Arg) -> Option<Var> {
+    match a {
+        Arg::Var(v) => Some(v.clone()),
+        Arg::Val(_v) => None
+    }
+}
+
+fn dep_of<SCHED>(v: &Var, dfg: &DFG<SCHED>) -> DepType {
+    if dfg.contains_key(v) {
+        DepType::Intra
+    } else {
+        DepType::InterBB
+    }
+}
+
+fn get_deps_of_expr<SCHED>(e: &Expr, dfg: &DFG<SCHED>) -> Vec<(Var, DepType)> {
+    match e {
+        Expr::Copy(a) | Expr::UnExp(_, a) => 
+            get_var_of_arg(a).iter().map(|v| (v.clone(), dep_of(v, dfg))).collect::<Vec<_>>(),
+        Expr::BinExp(op, a1, a2) => {
+            match op {
+                BinOp::Mu => {
+                    let mut ds = get_var_of_arg(a1).iter().map(|v| (v.clone(), dep_of(v, dfg))).collect::<Vec<_>>();
+                    let mut v2 = get_var_of_arg(a2).map(|v| (v.clone(), DepType::Carried(1))).into_iter().collect::<Vec<_>>();
+                    ds.append(&mut v2);
+                    ds
+                },
+                _ => get_var_of_arg(a1).iter()
+                .chain(get_var_of_arg(a2).iter())
+                .map(|v| (v.clone(), dep_of(v, dfg)))
+                .collect::<Vec<_>>()
+            }
+        },
+        Expr::TerExp(_, a1, a2, a3) => {
+            get_var_of_arg(a1).iter()
+                .chain(get_var_of_arg(a2).iter())
+                .chain(get_var_of_arg(a3).iter())
+                .map(|v| (v.clone(), dep_of(v, dfg)))
+                .collect::<Vec<_>>()
+        }
+    }
+}
+
+pub fn get_deps<SCHED>(s: &Stmt, dfg: &DFG<SCHED>) -> Vec<(Var, DepType)> {
+    get_deps_of_expr(&s.expr, dfg)
+}
+
 #[derive(Debug)]
 pub enum ExitOp {
     JC(Var, Label, Label),
@@ -276,7 +323,7 @@ pub struct GatedSSAIR {
 // Only dataflow dependency is currently supported.
 // TODO: other types of dependency should be supported
 // e.g., Anti/Output, May/Must/...
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum DepType {
     Intra,
     Carried(i32),
@@ -316,7 +363,7 @@ macro_rules! dfg {
     };
     ( $( $v:ident <- $e:expr; )* ) => {
         crate::types::to_dfg(vec![
-            $(stmt($v, $e), ()),*
+            $((stmt($v, $e), ())),*
         ])
     };
 }

@@ -27,6 +27,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4785bdd1c96b2a846b2bd7cc02e86b6b3dbf14e7e53446c4f54c92a361040822"
 
 [[package]]
+name = "dot"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a74b6c4d4a1cff5f454164363c16b72fa12463ca6b31f4b5f2035a65fa3d5906"
+
+[[package]]
 name = "either"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -58,6 +64,7 @@ dependencies = [
 name = "hls_graph_ir"
 version = "0.1.0"
 dependencies = [
+ "dot",
  "env_logger",
  "indoc",
  "itertools",
