@@ -603,7 +603,7 @@ mod tests {
                 tmp5 <- eq(tmp4, val(0, int(32))), 1;
                 cur2 <- select(tmp5, tmp1, tmp3), 1;
                 step2 <- plus(step1, val(1, int(32))), 1;
-                loop_cond <- gt(cur1, val(1, int(32))), 0;
+                loop_cond <- gt(cur2, val(1, int(32))), 1;
             }, 2),            
             exit: ExitOp::JMP(s("EXIT")),
         });
@@ -628,5 +628,10 @@ mod tests {
         };
         let ir = compile_sched_cdfg_ir(&ir);
         gen_verilog::generate_verilog_to_file(&ir, "./test/collatz.v");
+    }
+
+    #[test]
+    fn collatz_ii_1_sched_cdfg_ir() {
+        init();
     }
 }

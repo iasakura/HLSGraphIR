@@ -1,6 +1,6 @@
 def collatz(n):
     cur = n
-    step = 1
+    step = 0
     while cur != 1:
         print(f'{cur}, {step}')
         if cur % 2 == 0:
