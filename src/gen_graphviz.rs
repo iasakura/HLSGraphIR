@@ -9,13 +9,35 @@ use crate::dfg;
 #[derive(Clone)]
 struct Edge(Var, Var, DepType);
 
-impl<'a, SCHED> dot::Labeller<'a, Stmt, Edge> for DFG<SCHED> {
+pub trait SchedToLabel {
+    fn to_label(&self) -> String;
+}
+
+impl SchedToLabel for Sched {
+    fn to_label(&self) -> String {
+        format!("{}", self.sched)
+    }
+}
+
+impl SchedToLabel for () {
+    fn to_label(&self) -> String {
+        "".to_string()
+    }
+}
+
+impl<'a, SCHED: SchedToLabel> dot::Labeller<'a, DFGNode<SCHED>, Edge> for DFG<SCHED> {
     fn graph_id(&'a self) -> dot::Id<'a> {
         dot::Id::new("DFG").unwrap()
     }
 
-    fn node_id(&'a self, n: &Stmt) -> dot::Id<'a> {
-        dot::Id::new(n.var.name.clone()).unwrap()
+    fn node_id(&'a self, n: &DFGNode<SCHED>) -> dot::Id<'a> {
+        dot::Id::new(n.stmt.var.name.clone()).unwrap()
+    }
+
+    fn node_label(&'a self, n: &DFGNode<SCHED>) -> dot::LabelText<'a> {
+        dot::LabelText::LabelStr(format!(
+            "{}: {}", n.stmt.var.name ,n.sched.to_label()
+        ).into())
     }
 
     fn edge_label<'b>(&'b self, e: &Edge) -> dot::LabelText<'b> {
@@ -33,9 +55,9 @@ impl<'a, SCHED> dot::Labeller<'a, Stmt, Edge> for DFG<SCHED> {
     }
 }
 
-impl<'a, SCHED> dot::GraphWalk<'a, Stmt, Edge> for DFG<SCHED> {
-    fn nodes(&self) -> dot::Nodes<'a, Stmt> {
-        let nodes = self.iter().map(|(_, stmt)| stmt.stmt.clone() ).collect::<Vec<_>>();
+impl<'a, SCHED: Clone + SchedToLabel> dot::GraphWalk<'a, DFGNode<SCHED>, Edge> for DFG<SCHED> {
+    fn nodes(&self) -> dot::Nodes<'a, DFGNode<SCHED>> {
+        let nodes = self.iter().map(|(_, stmt)| stmt.clone() ).collect::<Vec<_>>();
         Cow::Owned(nodes)
     }
 
@@ -54,16 +76,16 @@ impl<'a, SCHED> dot::GraphWalk<'a, Stmt, Edge> for DFG<SCHED> {
         Cow::Owned(es)
     }
 
-    fn source(&'a self, edge: &Edge) -> Stmt {
-        self.get(&edge.0).unwrap().stmt.clone()
+    fn source(&'a self, edge: &Edge) -> DFGNode<SCHED> {
+        self.get(&edge.0).unwrap().clone()
     }
     
-    fn target(&'a self, edge: &Edge) -> Stmt {
-        self.get(&edge.1).unwrap().stmt.clone()
+    fn target(&'a self, edge: &Edge) -> DFGNode<SCHED> {
+        self.get(&edge.1).unwrap().clone()
     }
 }
 
-pub fn gen_graphviz<SCHED>(graph: &DFG<SCHED>, stream: &mut impl io::Write) {
+pub fn gen_graphviz<SCHED: Clone + SchedToLabel>(graph: &DFG<SCHED>, stream: &mut impl io::Write) {
     let mut v = Vec::<u8>::new();
     dot::render(graph, &mut v).unwrap();
     // Add constraint=false for ignoring carried dependency edges for determining layout
@@ -71,7 +93,7 @@ pub fn gen_graphviz<SCHED>(graph: &DFG<SCHED>, stream: &mut impl io::Write) {
     stream.write_all(&s.as_bytes()).unwrap()
 }
 
-pub fn gen_graphviz_from_dfg<SCHED>(graph: &DFG<SCHED>, filename: &str) {
+pub fn gen_graphviz_from_dfg<SCHED: Clone + SchedToLabel>(graph: &DFG<SCHED>, filename: &str) {
     let mut stream = io::BufWriter::new(fs::File::create(filename).unwrap());
     gen_graphviz(graph, &mut stream);
 }

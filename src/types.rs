@@ -336,7 +336,7 @@ pub struct Edge {
     pub dep_type: DepType,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct DFGNode<SCHED> {
     pub stmt: Stmt,
     // pub prevs: Vec<Edge>,
@@ -393,7 +393,7 @@ pub struct GenCDFGIR<SCHED: fmt::Debug, II: fmt::Debug> {
     pub returns: Vec<Var>
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Sched {
     pub sched: i32,
 }

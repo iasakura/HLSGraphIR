@@ -554,6 +554,7 @@ mod tests {
 
     use super::*;
     use crate::gen_verilog;
+    use crate::gen_graphviz;
 
     fn s(v: &str) -> String {
         String::from(v)
@@ -626,12 +627,131 @@ mod tests {
             cdfg,
             returns: vec![Var {name: String::from("step"), type_: int(32)}],
         };
-        let ir = compile_sched_cdfg_ir(&ir);
-        gen_verilog::generate_verilog_to_file(&ir, "./test/collatz.v");
+        let verilog = compile_sched_cdfg_ir(&ir);
+        gen_verilog::generate_verilog_to_file(&verilog, "./test/collatz.v");
+        
+        if let DFGBBBody::Pipe(ref dfg, _) = ir.cdfg.get("LOOP").unwrap().body {
+            gen_graphviz::gen_graphviz_from_dfg(dfg, "./test/collatz.dot")
+        }
     }
 
     #[test]
     fn collatz_ii_1_sched_cdfg_ir() {
-        init();
+        let n = &var("n", int(32));
+
+        let init_cur0 = &var("init_cur0", int(32));
+        let init_step0 = &var("init_step0", int(32));
+        let init_test0 = &var("init_test0", int(32));
+
+        let init_even = &var("init_even", int(32));
+        let init_odd_tmp = &var("init_odd_tmp", int(32));
+        let init_odd = &var("init_odd", int(32));
+        let init_mod = &var("init_mod", int(32));
+        let init_eq1 = &var("init_eq1", int(32));
+        let init_cur1 = &var("init_cur1", int(32));
+
+        let cur0 = &var("cur0", int(32));
+        let cur1 = &var("cur1", int(32));
+        let step = &var("step", int(32));
+        let loop_step = &var("loop_step", int(32));
+
+        // loop_tmp = select(x % 4 == 0, x / 4, select(x % 2 == 0, 3 (x / 2) + 1, (3 * x + 1) / 2))
+        let loop_if_e1 = &var("loop_if_e1", int(32));
+        let loop_if_e2_tmp1 = &var("loop_if_e2_tmp1", int(32));
+        let loop_if_e2_tmp2 = &var("loop_if_e2_tmp2", int(32));
+        let loop_if_e2 = &var("loop_if_e2", int(32));
+        let loop_if_e3_tmp1 = &var("loop_if_e3_tmp1", int(32));
+        let loop_if_e3_tmp2 = &var("loop_if_e3_tmp2", int(32));
+        let loop_if_e3 = &var("loop_if_e3", int(32));
+        let loop_if_else_cond_tmp = &var("loop_if_else_cond_tmp", int(32));
+        let loop_if_else_cond = &var("loop_if_else_cond", int(32));
+        let loop_if_else = &var("loop_if_else", int(32));
+        let loop_if_cond_tmp = &var("loop_if_cond_tmp", int(32));
+        let loop_if_cond = &var("loop_if_cond", int(32));
+        let loop_if = &var("loop_if", int(32));
+
+        let loop_cur0 = &var("loop_cur0", int(32));
+        let loop_cur1 = &var("loop_cur1", int(32));
+        let loop_cond = &var("loop_cond", int(32));
+
+        let res = &var("ret", int(32));
+
+        let cdfg = vec![
+            (s("INIT0"), DFGBB {
+                prevs: vec![],
+                body: DFGBBBody::Seq(dfg!{
+                    init_cur0 <- copy(n);
+                    init_step0 <- copy(val(0, int(32)));
+                    init_test0 <- gt(n, val(1, int(32)));
+                }),
+                exit: jc(init_test0, label("INIT1"), label("EXIT"))
+            }),
+            (s("INIT1"), DFGBB {
+                prevs: vec![label("INIT0")],
+                body: DFGBBBody::Seq(dfg!{
+                    init_even <- div(init_cur0, val(2, int(32)));
+                    init_odd_tmp <- mult(init_cur0, val(3, int(32)));
+                    init_odd <- plus(init_odd_tmp, val(1, int(32)));
+                    init_mod <- mod_(init_cur0, val(2, int(32)));
+                    init_eq1 <- eq(init_mod, val(0, int(32)));
+                    init_cur1 <- select(init_eq1, init_even, init_odd);
+                }),
+                exit: jmp(label("LOOP"))
+            }),
+            (s("LOOP"), DFGBB {
+                prevs: vec![label("INIT1")],
+                body: DFGBBBody::Pipe(dfg!{
+                    cur0 <- mu(init_cur0, loop_cur0);
+                    cur1 <- mu(init_cur1, loop_cur1);
+                    step <- mu(init_step0, loop_step);
+                    loop_step <- plus(step, val(1, int(32)));
+
+                    // loop_tmp <- select(x % 4 == 0, x / 4, select(x % 2 == 0, 3 (x / 2) + 1, (3 * x + 1) / 2))
+                    loop_if_e1 <- div(cur0, val(4, int(32)));
+                    loop_if_e2_tmp1 <- div(cur0, val(2, int(32)));
+                    loop_if_e2_tmp2 <- mult(val(3, int(32)), loop_if_e2_tmp1);
+                    loop_if_e2 <- plus(loop_if_e2_tmp2, val(1, int(32)));
+                    loop_if_e3_tmp1 <- mult(val(3, int(32)), cur0);
+                    loop_if_e3_tmp2 <- plus(loop_if_e3_tmp1, val(1, int(32)));
+                    loop_if_e3 <- div(loop_if_e3_tmp2, val(2, int(32)));
+                    loop_if_else_cond_tmp <- mod_(cur0, val(2, int(32)));
+                    loop_if_else_cond <- eq(loop_if_else_cond_tmp, val(0, int(32)));
+                    loop_if_else <- select(loop_if_else_cond, loop_if_e2, loop_if_e3);
+                    loop_if_cond_tmp <- mod_(cur0, val(4, int(32)));
+                    loop_if_cond <- eq(loop_if_cond_tmp, val(0, int(32)));
+                    loop_if <- select(loop_if_cond, loop_if_e1, loop_if_else);
+
+                    loop_cur0 <- copy(cur1);
+                    loop_cur1 <- copy(loop_if);
+                    loop_cond <- gt(cur1, val(1, int(32)));
+                }, ()),
+                exit: jmp(label("EXIT"))
+            }),
+            (s("EXIT"), DFGBB {
+                prevs: vec![label("INIT0"), label("LOOP")],
+                body: DFGBBBody::Seq(dfg!{
+                    res <- ita(init_step0, loop_step);
+                }),
+                exit: ret()
+            })
+        ].into_iter().collect::<HashMap<_, _>>();
+
+        let ir = CDFGIR {
+            name: "collatz_ii1".to_string(),
+            start: label("INIT0"),
+            params: vec![n.clone()],
+            cdfg,
+            returns: vec![res.clone()]
+        };
+
+        // let verilog = compile_sched_cdfg_ir(&ir);
+        // gen_verilog::generate_verilog_to_file(&verilog, "collatz_ii1/collatz_ii1.v");
+
+        for (l, dfg) in ir.cdfg {
+            match &dfg.body {
+                DFGBBBody::Seq(dfg) | DFGBBBody::Pipe(dfg, _) => 
+                    gen_graphviz::gen_graphviz_from_dfg(dfg, &format!("./test/collatz_ii1/{}.dot", l))
+            }
+        }
     }
 }
