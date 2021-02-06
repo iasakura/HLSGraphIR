@@ -71,6 +71,8 @@ step
 
  タイミング制約は forward edge しか見ない (どうせ loop carried dep は同じサイクルで実行されないので。) よって DAG 上のパスしかみない。例えば組み合わせレイテンシを見るなら各 i, j に対して最長パスだけみればよくて DAG 上の最長パスになるので多項式で計算できる。
 
+と思ったけど loop carried dep も forwarding されることはあるのでだめですね。
+
 cur1 -> tmp4 -> tmp5 -> cur2 -> (1) cur1
 (L = 0 とする)
 t_cur1 <= t_tmp4
