@@ -212,6 +212,41 @@ fn ir_expr_to_vexpr(e: &Expr, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &
     }
 }
 
+fn rename_with_sched(a: &Arg, i: i32, deps: &HashMap<Var, DepType>, dfg: &HashMap<Var, DFGNode<Sched>>, ii: i32) -> Arg {
+    match a {
+        Arg::Val(n) => Arg::Val(n.clone()),
+        Arg::Var(v) => {
+            let dist = match deps.get(v).unwrap() {
+                DepType::Carried(n) => *n,
+                _ => 0,
+            };
+            match dfg.get(v) {
+                // Operation chaining
+                // TODO: support multi cycle opertaion: node.sched.sched + latancy of node = ii * dist + i 
+                Some(node) if node.sched.sched == i + ii * dist => Arg::Var(Var { name: format!("{}_wire", v.name), ..v.clone() }),
+                _ => Arg::Var(v.clone())
+            }
+        }
+    }
+}
+
+fn ir_expr_to_vexpr_with_sched(e: &Expr, i: i32, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &mut CompilerState, dfg: &HashMap<Var, DFGNode<Sched>>, ii: i32) -> VExpr {
+    let deps = get_deps_of_expr(e, dfg).into_iter().collect::<HashMap<Var, _>>();
+    match e {
+        Expr::Copy(a) =>
+            ir_expr_to_vexpr(&Expr::Copy(rename_with_sched(a, i, &deps, dfg, ii)), is_first, prevs, cs),
+        Expr::UnExp(op, a) =>
+            ir_expr_to_vexpr(&Expr::UnExp(*op, rename_with_sched(a, i, &deps, dfg, ii)), is_first, prevs, cs),
+        // Because second argument of Mu is loop carried dependency, the arg must be read from register.
+        Expr::BinExp(BinOp::Mu, a1, a2) =>
+            ir_expr_to_vexpr(&Expr::BinExp(BinOp::Mu, rename_with_sched(a1, i, &deps, dfg, ii), rename_with_sched(a2, i, &deps, dfg, ii)), is_first, prevs, cs),
+        Expr::BinExp(op, a1, a2) =>
+            ir_expr_to_vexpr(&Expr::BinExp(*op, rename_with_sched(a1, i, &deps, dfg, ii), rename_with_sched(a2, i, &deps, dfg, ii)), is_first, prevs, cs),
+        Expr::TerExp(op, a1, a2, a3) =>
+            ir_expr_to_vexpr(&Expr::TerExp(*op, rename_with_sched(a1, i, &deps, dfg, ii), rename_with_sched(a2, i, &deps, dfg, ii), rename_with_sched(a3, i, &deps, dfg, ii)), is_first, prevs, cs),
+    }
+}
+
 fn make_rst_n() -> VVar {
     vvar("rst_n", 1, None)
 }
@@ -339,12 +374,18 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
 
     let sched_stmts = create_stage_stmt_map(dfg);
 
+    cs.add_event(all_true(&conds), vec![vassign(&cnt, vplus(&cnt, val(1, uint(nbits))))]);
+
     for i in min_time..=max_time {
-        debug!("Generating time {}", i);
+
         conds.push(veq(&cnt, val(i, type_.clone())));
-        let mut actions = sched_stmts.get(&i).unwrap().iter().map(|stmt|
-            compile_stmt_to_vassign(stmt, prevs, cs)
-        ).collect::<Vec<_>>();
+        let mut actions = sched_stmts.get(&i).unwrap().iter().map(|stmt| {
+            // TODO: is it correct to set II = 0?
+            let rhs = ir_expr_to_vexpr_with_sched(&stmt.expr, i, None, prevs, cs, dfg, 0);
+            let var = ir_var_to_vvar(&stmt.var);
+            let wire = cs.new_wire(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
+            vassign(var, wire)
+        }).collect::<Vec<_>>();
         // Finalizations
         if i == max_time {
             actions.push(vassign(&done, TRUE));
@@ -366,35 +407,6 @@ fn create_stage_stmt_map<'a>(dfg: &'a DFG<Sched>) -> HashMap<i32, Vec<&'a Stmt>>
 
 fn is_loop_cond(s: &Stmt) -> bool {
     s.var.name == "loop_cond"
-}
-
-fn rename_with_sched(a: &Arg, i: i32, dfg: &HashMap<Var, DFGNode<Sched>>) -> Arg {
-    match a {
-        Arg::Val(n) => Arg::Val(n.clone()),
-        Arg::Var(v) => {
-            match dfg.get(v) {
-                // Operation chaining
-                Some(node) if node.sched.sched == i => Arg::Var(Var { name: format!("{}_wire", v.name), ..v.clone() }),
-                _ => Arg::Var(v.clone())
-            }
-        }
-    }
-}
-
-fn ir_expr_to_vexpr_with_sched(e: &Expr, i: i32, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &mut CompilerState, dfg: &HashMap<Var, DFGNode<Sched>>) -> VExpr {
-    match e {
-        Expr::Copy(a) =>
-            ir_expr_to_vexpr(&Expr::Copy(rename_with_sched(a, i, dfg)), is_first, prevs, cs),
-        Expr::UnExp(op, a) =>
-            ir_expr_to_vexpr(&Expr::UnExp(*op, rename_with_sched(a, i, dfg)), is_first, prevs, cs),
-        // Because second argument of Mu is loop carried dependency, the arg must be read from register.
-        Expr::BinExp(BinOp::Mu, a1, a2) =>
-            ir_expr_to_vexpr(&Expr::BinExp(BinOp::Mu, rename_with_sched(a1, i, dfg), a2.clone()), is_first, prevs, cs),
-        Expr::BinExp(op, a1, a2) =>
-            ir_expr_to_vexpr(&Expr::BinExp(*op, rename_with_sched(a1, i, dfg), rename_with_sched(a2, i, dfg)), is_first, prevs, cs),
-        Expr::TerExp(op, a1, a2, a3) =>
-            ir_expr_to_vexpr(&Expr::TerExp(*op, rename_with_sched(a1, i, dfg), rename_with_sched(a2, i, dfg), rename_with_sched(a3, i, dfg)), is_first, prevs, cs),
-    }
 }
 
 fn varr_at<T: ToVVar>(arr: T, idx: i32) -> VVar {
@@ -436,14 +448,14 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
         for s in ss {
             let var = ir_var_to_vvar(&s.var);
             if is_loop_cond(s) {
-                let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&varr_at(&stage_is_first, i)), prevs, cs, dfg);
+                let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&varr_at(&stage_is_first, i)), prevs, cs, dfg, ii);
                 let wire = cs.new_wire(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
                 let loop_cond_reg = cs.new_reg(&format!("{}_loop_cond", l), 1, None);
                 inits.push(vassign(&loop_cond_reg, TRUE));
                 actions.push(vassign(&loop_cond_reg, vand(&loop_cond_reg, &wire)));
                 loop_conds = Some((i, wire.clone(), loop_cond_reg.clone()));
             } else {
-                let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&varr_at(&stage_is_first, i)), prevs, cs, dfg);
+                let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&varr_at(&stage_is_first, i)), prevs, cs, dfg, ii);
                 let wire = cs.new_wire(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
                 actions.push(vassign(var, wire));
             }

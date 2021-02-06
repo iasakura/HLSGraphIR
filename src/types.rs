@@ -245,7 +245,7 @@ fn dep_of<SCHED>(v: &Var, dfg: &DFG<SCHED>) -> DepType {
     }
 }
 
-fn get_deps_of_expr<SCHED>(e: &Expr, dfg: &DFG<SCHED>) -> Vec<(Var, DepType)> {
+pub fn get_deps_of_expr<SCHED>(e: &Expr, dfg: &DFG<SCHED>) -> Vec<(Var, DepType)> {
     match e {
         Expr::Copy(a) | Expr::UnExp(_, a) => 
             get_var_of_arg(a).iter().map(|v| (v.clone(), dep_of(v, dfg))).collect::<Vec<_>>(),
