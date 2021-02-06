@@ -3,6 +3,9 @@ use crate::dfg;
 
 use std::cmp;
 use std::collections::HashMap;
+use std::io::{self, Write};
+use std::path::PathBuf;
+use std::process::Command;
 use std::rc::Rc;
 use std::iter;
 
@@ -572,6 +575,22 @@ mod tests {
         String::from(v)
     }
     
+    fn run_test(name: &str) {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(format!("cd {}/test/{} &&  verilator --trace --trace-params --trace-structs --trace-underscore -cc {}.v -exe {}_sim.cc && make -C obj_dir -f V{}.mk && ./obj_dir/V{}", root.display(), name, name, name, name, name))
+            .output()
+            .expect("failed to execute process");
+
+        println!("status: {}", output.status);
+        io::stdout().write_all(&output.stdout).unwrap();
+        io::stderr().write_all(&output.stderr).unwrap();
+
+        assert!(output.status.success());
+    }
+
     #[test]
     fn collatz_sched_cdfg_ir() {
         init();
@@ -640,11 +659,13 @@ mod tests {
             returns: vec![Var {name: String::from("step"), type_: int(32)}],
         };
         let verilog = compile_sched_cdfg_ir(&ir);
-        gen_verilog::generate_verilog_to_file(&verilog, "./test/collatz.v");
+        gen_verilog::generate_verilog_to_file(&verilog, "./test/collatz/collatz.v");
         
         if let DFGBBBody::Pipe(ref dfg, _) = ir.cdfg.get("LOOP").unwrap().body {
-            gen_graphviz::gen_graphviz_from_dfg(dfg, "./test/collatz.dot")
+            gen_graphviz::gen_graphviz_from_dfg(dfg, "./test/collatz/collatz.dot")
         }
+
+        run_test("collatz");
     }
 
     #[test]
@@ -765,5 +786,7 @@ mod tests {
                     gen_graphviz::gen_graphviz_from_dfg(dfg, &format!("./test/collatz_ii1/{}.dot", l))
             }
         }
+
+        run_test("collatz_ii1");
     }
 }
