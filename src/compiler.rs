@@ -568,6 +568,7 @@ mod tests {
     }
 
     use super::*;
+
     use crate::gen_verilog;
     use crate::gen_graphviz;
 
@@ -575,7 +576,18 @@ mod tests {
         String::from(v)
     }
     
-    fn run_test(name: &str) {
+    fn run_test(ir: &SchedCDFGIR) {
+        let name = &ir.name;
+        let verilog = compile_sched_cdfg_ir(ir);
+        gen_verilog::generate_verilog_to_file(&verilog, &format!("./test/{}/{}.v", name, name));
+
+        for (l, dfg) in &ir.cdfg {
+            match &dfg.body {
+                DFGBBBody::Seq(dfg) | DFGBBBody::Pipe(dfg, _) => 
+                    gen_graphviz::gen_graphviz_from_dfg(dfg, &format!("./test/{}/{}.dot", name, l))
+            }
+        }
+
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
         let output = Command::new("sh")
@@ -658,14 +670,8 @@ mod tests {
             cdfg,
             returns: vec![Var {name: String::from("step"), type_: int(32)}],
         };
-        let verilog = compile_sched_cdfg_ir(&ir);
-        gen_verilog::generate_verilog_to_file(&verilog, "./test/collatz/collatz.v");
-        
-        if let DFGBBBody::Pipe(ref dfg, _) = ir.cdfg.get("LOOP").unwrap().body {
-            gen_graphviz::gen_graphviz_from_dfg(dfg, "./test/collatz/collatz.dot")
-        }
 
-        run_test("collatz");
+        run_test(&ir);
     }
 
     #[test]
@@ -777,16 +783,56 @@ mod tests {
             returns: vec![res.clone()]
         };
 
-        let verilog = compile_sched_cdfg_ir(&ir);
-        gen_verilog::generate_verilog_to_file(&verilog, "./test/collatz_ii1/collatz_ii1.v");
+        run_test(&ir);
+    }
 
-        for (l, dfg) in ir.cdfg {
-            match &dfg.body {
-                DFGBBBody::Seq(dfg) | DFGBBBody::Pipe(dfg, _) => 
-                    gen_graphviz::gen_graphviz_from_dfg(dfg, &format!("./test/collatz_ii1/{}.dot", l))
-            }
-        }
+    #[test]
+    fn sum_of_square() {
+        let n = &var("n", int(32));
+        let test0 = &var("test0", uint(1));
+        let res = &var("res", int(32));
+        let i = &var("i", int(32));
+        let i_next = &var("i_next", int(32));
+        let mul = &var("mul", int(32));
+        let sum = &var("sum", int(32));
+        let sum_next = &var("sum_next", int(32));
+        let loop_cond = &var("loop_cond", int(1));
 
-        run_test("collatz_ii1");
+        let ir = GenCDFGIR {
+            name: "sum_of_square".to_string(),
+            start: label("INIT"),
+            params: vec![n.clone()],
+            cdfg: vec![
+                (label("INIT"), DFGBB {
+                    prevs: vec![],
+                    body: DFGBBBody::Seq(dfg!{
+                        test0 <- gt(n, val(0, int(32))), 0;
+                    }),
+                    exit: jc(test0, label("LOOP"), label("EXIT"))
+                }),
+                (label("LOOP"), DFGBB {
+                    prevs: vec![label("INIT")],
+                    body: DFGBBBody::Pipe(dfg!{
+                        i <- mu(val(1, int(32)), i_next), 0;
+                        sum <- mu(val(0, int(32)), sum_next), 1;
+                        i_next <- plus(i, val(1, int(32))), 1;
+                        mul <- mult(i, i), 1;
+                        sum_next <- plus(sum, mul), 2;
+                        loop_cond <- le(i_next, n), 1;
+                    }, 2),
+                    exit: jmp(label("EXIT"))
+                }),
+                (label("EXIT"), DFGBB {
+                    prevs: vec![label("INIT"), label("LOOP")],
+                    body: DFGBBBody::Seq(dfg!{
+                        res <- ita(val(0, int(32)), sum_next), 0;
+                    }),
+                    exit: ret()
+                })
+            ].into_iter().collect::<HashMap<_, _>>(),
+            returns: vec![res.clone()],
+        };
+
+        run_test(&ir);
     }
 }
