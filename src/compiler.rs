@@ -592,7 +592,7 @@ mod tests {
 
         let output = Command::new("sh")
             .arg("-c")
-            .arg(format!("cd {}/test/{} &&  verilator --trace --trace-params --trace-structs --trace-underscore -cc {}.v -exe {}_sim.cc && make -C obj_dir -f V{}.mk && ./obj_dir/V{}", root.display(), name, name, name, name, name))
+            .arg(format!("cd {}/test/{} &&  verilator --trace --trace-params --trace-structs --trace-underscore -cc {}.v -exe sim.cc && make -C obj_dir -f V{}.mk && ./obj_dir/V{}", root.display(), name, name, name, name))
             .output()
             .expect("failed to execute process");
 
