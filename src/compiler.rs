@@ -513,7 +513,7 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
 
         if let Some((_, _, loop_cond_reg)) = loop_conds {
             let stage_all_disabled_expr = all_true(&(min_stage..=max_stage).map(|i| 
-                vnot(varr_at(&stage_is_first, i))
+                vnot(varr_at(&stage_en, i))
             ).collect::<Vec<_>>());
             let stage_all_disabled = cs.new_wire(&format!("{}_stage_all_disabled", l), 1, None, stage_all_disabled_expr);
             cs.add_event(all_true(&conds), vec![vassign (
