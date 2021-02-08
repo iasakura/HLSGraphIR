@@ -2,13 +2,13 @@ use crate::types::*;
 use crate::dfg;
 
 use std::cmp;
-use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::Command;
 use std::rc::Rc;
 use std::iter;
 
+use indexmap::map::IndexMap;
 use log::{debug, error, log_enabled, info, Level};
 
 const FINISH_STATE : &'static str = "__FINISH";
@@ -49,9 +49,9 @@ struct CompilerState {
     start: VVar,
     finish: VVar,
 
-    ens: HashMap<Label, VVar>,
-    dones: HashMap<Label, VVar>,
-    states: HashMap<Label, VExpr>,
+    ens: IndexMap<Label, VVar>,
+    dones: IndexMap<Label, VVar>,
+    states: IndexMap<Label, VExpr>,
 }
 
 fn collect_vars<'a, SCHED, II>(dfgbb: &'a DFGBB<SCHED, II>) -> Vec<&'a Var> {
@@ -78,7 +78,7 @@ impl CompilerState {
             prev_state: vvar("dummy", 0, None),
             start: vvar("dummy", 0, None),
             finish: vvar("dummy", 0, None),
-            ens: HashMap::new(), dones: HashMap::new(), states: HashMap::new(),
+            ens: IndexMap::new(), dones: IndexMap::new(), states: IndexMap::new(),
         };
         gen_verilog_io_signals(&ir.params, &ir.returns, &mut cs);
 
@@ -146,7 +146,7 @@ impl CompilerState {
     }
 }
 
-fn get<'a, K : std::hash::Hash + std::cmp::Eq + std::fmt::Debug, V>(map: &'a HashMap<K, V>, key: &K) -> &'a V {
+fn get<'a, K : std::hash::Hash + std::cmp::Eq + std::fmt::Debug, V>(map: &'a IndexMap<K, V>, key: &K) -> &'a V {
     map.get(key).expect(&format!("{:?} is not found.\n", key))
 }
 
@@ -215,7 +215,7 @@ fn ir_expr_to_vexpr(e: &Expr, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &
     }
 }
 
-fn rename_with_sched(a: &Arg, i: i32, deps: &HashMap<Var, DepType>, dfg: &HashMap<Var, DFGNode<Sched>>, ii: i32) -> Arg {
+fn rename_with_sched(a: &Arg, i: i32, deps: &IndexMap<Var, DepType>, dfg: &IndexMap<Var, DFGNode<Sched>>, ii: i32) -> Arg {
     match a {
         Arg::Val(n) => Arg::Val(n.clone()),
         Arg::Var(v) => {
@@ -233,8 +233,8 @@ fn rename_with_sched(a: &Arg, i: i32, deps: &HashMap<Var, DepType>, dfg: &HashMa
     }
 }
 
-fn ir_expr_to_vexpr_with_sched(e: &Expr, i: i32, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &mut CompilerState, dfg: &HashMap<Var, DFGNode<Sched>>, ii: i32) -> VExpr {
-    let deps = get_deps_of_expr(e, dfg).into_iter().collect::<HashMap<Var, _>>();
+fn ir_expr_to_vexpr_with_sched(e: &Expr, i: i32, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &mut CompilerState, dfg: &IndexMap<Var, DFGNode<Sched>>, ii: i32) -> VExpr {
+    let deps = get_deps_of_expr(e, dfg).into_iter().collect::<IndexMap<Var, _>>();
     match e {
         Expr::Copy(a) =>
             ir_expr_to_vexpr(&Expr::Copy(rename_with_sched(a, i, &deps, dfg, ii)), is_first, prevs, cs),
@@ -255,7 +255,7 @@ fn make_rst_n() -> VVar {
 }
 
 // Create CFG state machine and returs en/done signals 
-fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, init_actions: &HashMap<Label, Vec<VAssign>>) {
+fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, init_actions: &IndexMap<Label, Vec<VAssign>>) {
     // make CFG FSM
     let rst_n = make_rst_n();
 
@@ -400,8 +400,8 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
     vec![init_action]
 }
 
-fn create_stage_stmt_map<'a>(dfg: &'a DFG<Sched>) -> HashMap<i32, Vec<&'a Stmt>> {
-    let mut ret = HashMap::<i32, Vec<&'a Stmt>>::new();
+fn create_stage_stmt_map<'a>(dfg: &'a DFG<Sched>) -> IndexMap<i32, Vec<&'a Stmt>> {
+    let mut ret = IndexMap::<i32, Vec<&'a Stmt>>::new();
     for (_v, node) in dfg {
         ret.entry(node.sched.sched).or_insert(vec![]).push(&node.stmt);
     };
@@ -538,7 +538,7 @@ fn gen_dfg_machine(l: &Label, dfgbb: &DFGBB<Sched, i32>, cs: &mut CompilerState)
 }
 
 fn gen_verilog_definitions(ir: &SchedCDFGIR, cs: &mut CompilerState) {
-    let mut init_actions = HashMap::<Label, Vec<VAssign>>::new();
+    let mut init_actions = IndexMap::<Label, Vec<VAssign>>::new();
     for (l, dfgbb) in &ir.cdfg {
         debug!("Generate label {}", l);
         let actions = gen_dfg_machine(&l, &dfgbb, cs);
@@ -660,7 +660,7 @@ mod tests {
             exit: ExitOp::RET,
         });
 
-        let cdfg = vec![init, loop_, exit].into_iter().collect::<HashMap<_, _>>();
+        let cdfg = vec![init, loop_, exit].into_iter().collect::<IndexMap<_, _>>();
 
 
         let ir = GenCDFGIR {
@@ -773,7 +773,7 @@ mod tests {
                 }),
                 exit: ret()
             })
-        ].into_iter().collect::<HashMap<_, _>>();
+        ].into_iter().collect::<IndexMap<_, _>>();
 
         let ir = GenCDFGIR {
             name: "collatz_ii1".to_string(),
@@ -829,7 +829,7 @@ mod tests {
                     }),
                     exit: ret()
                 })
-            ].into_iter().collect::<HashMap<_, _>>(),
+            ].into_iter().collect::<IndexMap<_, _>>(),
             returns: vec![res.clone()],
         };
 
@@ -881,7 +881,7 @@ mod tests {
                     }),
                     exit: ret()
                 })
-            ].into_iter().collect::<HashMap<_, _>>(),
+            ].into_iter().collect::<IndexMap<_, _>>(),
             returns: vec![res.clone()],
         };
 
@@ -895,6 +895,7 @@ mod tests {
         let test0 = &var("test0", uint(1));
         let res = &var("res", int(32));
         let i = &var("i", int(32));
+        // let i_copy = &var("i_copy", int(32));
         let i_next = &var("i_next", int(32));
         let mul = &var("mul", int(32));
         let pls = &var("pls", int(32));
@@ -921,6 +922,9 @@ mod tests {
                         sum <- mu(val(0, int(32)), sum_next), 2;
                         i_next <- plus(i, val(1, int(32))), 0;
                         mul <- mult(i, i), 1;
+                        // Here we should read value of i from prev-stage (i.e., stage 1.)
+                        // i_copy <- copy(i), 1;
+                        // pls <- plus(mul, i_copy), 2;
                         pls <- plus(mul, i), 2;
                         sum_next <- plus(sum, pls), 3;
                         loop_cond <- le(i_next, n), 0;
@@ -934,7 +938,7 @@ mod tests {
                     }),
                     exit: ret()
                 })
-            ].into_iter().collect::<HashMap<_, _>>(),
+            ].into_iter().collect::<IndexMap<_, _>>(),
             returns: vec![res.clone()],
         };
 

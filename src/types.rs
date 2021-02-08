@@ -1,6 +1,7 @@
 use std::fmt;
-use std::collections::HashMap;
 use std::rc::Rc;
+
+use indexmap::map::IndexMap;
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Type {
@@ -309,7 +310,7 @@ pub struct BB {
     pub exit: ExitOp
 }
 
-pub type CFG = HashMap<Label, BB>;
+pub type CFG = IndexMap<Label, BB>;
 
 #[derive(Debug)]
 pub struct GatedSSAIR {
@@ -344,10 +345,10 @@ pub struct DFGNode<SCHED> {
     pub sched: SCHED,
 }
 
-pub type DFG<SCHED> = HashMap<Var, DFGNode<SCHED>>;
+pub type DFG<SCHED> = IndexMap<Var, DFGNode<SCHED>>;
 
 pub fn to_dfg<SCHED>(nodes: Vec<(Stmt, SCHED)>) -> DFG<SCHED> {
-    let mut ret = HashMap::new();
+    let mut ret = IndexMap::new();
     for (stmt, sched) in nodes { 
         ret.insert(stmt.var.clone(), DFGNode {stmt, sched});
     }
@@ -381,7 +382,7 @@ pub struct DFGBB<SCHED, II> {
     pub exit: ExitOp
 }
 
-pub type CDFG<SCHED, II> = HashMap<Label, DFGBB<SCHED, II>>;
+pub type CDFG<SCHED, II> = IndexMap<Label, DFGBB<SCHED, II>>;
 
 // T is the additional info for DFG, U is the additional info for 
 #[derive(Debug)]
