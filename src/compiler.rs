@@ -835,4 +835,110 @@ mod tests {
 
         run_test(&ir);
     }
+
+    #[test]
+    fn sum_of_square_ii1() {
+        let n = &var("n", int(32));
+        let test0 = &var("test0", uint(1));
+        let res = &var("res", int(32));
+        let i = &var("i", int(32));
+        let i_next = &var("i_next", int(32));
+        let mul = &var("mul", int(32));
+        let mul_2 = &var("mul_2", int(32));
+        let sum = &var("sum", int(32));
+        let sum_next = &var("sum_next", int(32));
+        let loop_cond = &var("loop_cond", int(1));
+
+        let ir = GenCDFGIR {
+            name: "sum_of_square_ii1".to_string(),
+            start: label("INIT"),
+            params: vec![n.clone()],
+            cdfg: vec![
+                (label("INIT"), DFGBB {
+                    prevs: vec![],
+                    body: DFGBBBody::Seq(dfg!{
+                        test0 <- gt(n, val(0, int(32))), 0;
+                    }),
+                    exit: jc(test0, label("LOOP"), label("EXIT"))
+                }),
+                (label("LOOP"), DFGBB {
+                    prevs: vec![label("INIT")],
+                    body: DFGBBBody::Pipe(dfg!{
+                        i <- mu(val(1, int(32)), i_next), 0;
+                        sum <- mu(val(0, int(32)), sum_next), 2;
+                        i_next <- plus(i, val(1, int(32))), 0;
+                        mul <- mult(i, i), 1;
+                        mul_2 <- copy(mul), 2;
+                        sum_next <- plus(sum, mul_2), 3;
+                        loop_cond <- le(i_next, n), 0;
+                    }, 1),
+                    exit: jmp(label("EXIT"))
+                }),
+                (label("EXIT"), DFGBB {
+                    prevs: vec![label("INIT"), label("LOOP")],
+                    body: DFGBBBody::Seq(dfg!{
+                        res <- ita(val(0, int(32)), sum_next), 0;
+                    }),
+                    exit: ret()
+                })
+            ].into_iter().collect::<HashMap<_, _>>(),
+            returns: vec![res.clone()],
+        };
+
+        run_test(&ir);
+    }
+
+    // Test case with access across stages with distance > 1
+    #[test]
+    fn sum_of_square_plus_i() {
+        let n = &var("n", int(32));
+        let test0 = &var("test0", uint(1));
+        let res = &var("res", int(32));
+        let i = &var("i", int(32));
+        let i_next = &var("i_next", int(32));
+        let mul = &var("mul", int(32));
+        let pls = &var("pls", int(32));
+        let sum = &var("sum", int(32));
+        let sum_next = &var("sum_next", int(32));
+        let loop_cond = &var("loop_cond", int(1));
+
+        let ir = GenCDFGIR {
+            name: "sum_of_square_plus_i".to_string(),
+            start: label("INIT"),
+            params: vec![n.clone()],
+            cdfg: vec![
+                (label("INIT"), DFGBB {
+                    prevs: vec![],
+                    body: DFGBBBody::Seq(dfg!{
+                        test0 <- gt(n, val(0, int(32))), 0;
+                    }),
+                    exit: jc(test0, label("LOOP"), label("EXIT"))
+                }),
+                (label("LOOP"), DFGBB {
+                    prevs: vec![label("INIT")],
+                    body: DFGBBBody::Pipe(dfg!{
+                        i <- mu(val(1, int(32)), i_next), 0;
+                        sum <- mu(val(0, int(32)), sum_next), 2;
+                        i_next <- plus(i, val(1, int(32))), 0;
+                        mul <- mult(i, i), 1;
+                        pls <- plus(mul, i), 2;
+                        sum_next <- plus(sum, pls), 3;
+                        loop_cond <- le(i_next, n), 0;
+                    }, 1),
+                    exit: jmp(label("EXIT"))
+                }),
+                (label("EXIT"), DFGBB {
+                    prevs: vec![label("INIT"), label("LOOP")],
+                    body: DFGBBBody::Seq(dfg!{
+                        res <- ita(val(0, int(32)), sum_next), 0;
+                    }),
+                    exit: ret()
+                })
+            ].into_iter().collect::<HashMap<_, _>>(),
+            returns: vec![res.clone()],
+        };
+
+        run_test(&ir);
+    }
+
 }
