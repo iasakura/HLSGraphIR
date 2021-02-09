@@ -29,4 +29,60 @@ args は wire
 ## BB
 以下の I/F を持つモジュールになる
 
-- start
+- en
+- done
+
+レイテンシは可変とする
+
+
+### External module
+
+```rust
+port FIFO {
+    read() -> i32 {
+        latency: Variable,
+    }
+}
+
+cdfg sample {
+    starts INIT;
+    // Arguments are either scalar or port
+    params (n, port FIFO);
+    returns ret;
+    resources {
+        // internal module instantiation
+        module add_0(input clk, input )
+        module add_0 : ADDR {
+            call : (int(32), int(32)) -> int(32) {
+                latency: Fixed(0), // combinatorial logic
+                initiation_interval: 1
+            }
+        }
+        module bram_0 : BRAM_2P {
+            read: (int(32)) -> int(32) {
+                timing: {
+                    latency: Fixed(1), // sequential logic
+                    initiation_interval: 1
+                }
+            }
+            write: (int(32), int(32)) -> int(32) {
+                timing: {
+                    latency: Fixed(2),
+                    initiation_interval: 1
+                }
+            }
+        }
+    }
+    cdfg {
+        INIT: {
+
+        } exit(jc(test0, LOOP, EXIT))
+        LOOP(INIT) {
+            sum = mu(0, sum);
+            sum_next = call add_0(i, sum)
+        } exit(jmp(EXIT))
+        EXIT(INIT, LOOP) {
+
+        } exit(ret)
+    }
+```

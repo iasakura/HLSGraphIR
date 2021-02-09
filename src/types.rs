@@ -382,7 +382,24 @@ pub struct DFGBB<SCHED, II> {
     pub exit: ExitOp
 }
 
+#[derive(Debug)]
+pub enum Latency {
+    Fixed(u32),
+    Variable,
+}
+
+#[derive(Debug)]
+pub struct Resource {
+    name: String,
+    inputs: Vec<Var>,
+    // TODO: Support outputs > 1?
+    oututs: Var,
+    latency: Latency,
+    initiation_interval: u32,
+}
+
 pub type CDFG<SCHED, II> = IndexMap<Label, DFGBB<SCHED, II>>;
+pub type ResourceMap = IndexMap<Label, Resource>;
 
 // T is the additional info for DFG, U is the additional info for 
 #[derive(Debug)]
@@ -390,6 +407,7 @@ pub struct GenCDFGIR<SCHED: fmt::Debug, II: fmt::Debug> {
     pub name: String,
     pub start: Label,
     pub params: Vec<Var>,
+    // pub resources: ResourceMap,
     pub cdfg: CDFG<SCHED, II>,
     pub returns: Vec<Var>
 }
