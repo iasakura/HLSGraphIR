@@ -5,15 +5,15 @@ use indexmap::map::IndexMap;
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Type {
-    pub bits: i32,
+    pub bits: u32,
     pub signed: bool,
 }
 
-pub fn int(bits: i32) -> Type {
+pub fn int(bits: u32) -> Type {
     Type {bits, signed: true}
 }
 
-pub fn uint(bits: i32) -> Type {
+pub fn uint(bits: u32) -> Type {
     Type {bits, signed: false}
 }
 
@@ -327,7 +327,7 @@ pub struct GatedSSAIR {
 #[derive(Debug, Clone, Copy)]
 pub enum DepType {
     Intra,
-    Carried(i32),
+    Carried(u32),
     InterBB,
 }
 
@@ -396,21 +396,21 @@ pub struct GenCDFGIR<SCHED: fmt::Debug, II: fmt::Debug> {
 
 #[derive(Debug, Clone)]
 pub struct Sched {
-    pub sched: i32,
+    pub sched: u32,
 }
 
-pub fn sched(s: i32) -> Sched {
+pub fn sched(s: u32) -> Sched {
     Sched {sched: s}
 }
 
 pub type CDFGIR = GenCDFGIR<(), ()>;
-pub type SchedCDFGIR = GenCDFGIR<Sched, i32>;
+pub type SchedCDFGIR = GenCDFGIR<Sched, u32>;
 
 #[derive(Debug, Clone)]
 pub struct VVar {
     pub name: String,
-    pub bits: i32,
-    pub idx: Option<i32>,
+    pub bits: u32,
+    pub idx: Option<u32>,
 }
 
 impl fmt::Display for VVar {
@@ -423,7 +423,7 @@ impl fmt::Display for VVar {
     }
 }
 
-pub fn vvar<T: fmt::Display>(name: T, bits: i32, idx: Option<i32>) -> VVar {
+pub fn vvar<T: fmt::Display>(name: T, bits: u32, idx: Option<u32>) -> VVar {
     VVar {name: name.to_string(), bits, idx}
 }
 

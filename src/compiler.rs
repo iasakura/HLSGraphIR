@@ -62,8 +62,8 @@ fn collect_vars<'a, SCHED, II>(dfgbb: &'a DFGBB<SCHED, II>) -> Vec<&'a Var> {
     dfg.iter().map(|(v, _)| v).collect::<Vec<_>>()
 }
 
-fn bits_of_states(n: i32) -> i32 {
-    let res = f64::ceil(f64::log2(f64::from(n))) as i32;
+fn bits_of_states(n: u32) -> u32 {
+    let res = f64::ceil(f64::log2(f64::from(n))) as u32;
     cmp::max(res, 1)
 }
 
@@ -87,7 +87,7 @@ impl CompilerState {
         let labels = ir.cdfg.iter().map(|(l, _)| l).chain(iter::once(&finish_state)).collect::<Vec<_>>();
 
         // TODO: bitwidth
-        let nbits = bits_of_states(labels.len() as i32);
+        let nbits = bits_of_states(labels.len() as u32);
         cs.cur_state = cs.new_reg("cur_state", nbits, None);
         cs.prev_state = cs.new_reg("prev_state", nbits, None);
 
@@ -117,13 +117,13 @@ impl CompilerState {
         cs
     }
 
-    fn new_localparam(&mut self, name: &str, bits: i32, v: i32) -> VVar {
+    fn new_localparam(&mut self, name: &str, bits: u32, v: i32) -> VVar {
         let var = vvar(name, bits, None);
         self.localparams.push((var, v));
         self.localparams.last().unwrap().0.clone()
     }
 
-    fn new_reg(&mut self, name: &str, bits: i32, idx: Option<i32>) -> VVar {
+    fn new_reg(&mut self, name: &str, bits: u32, idx: Option<u32>) -> VVar {
         if log_enabled!(Level::Debug) {
             if let Some(_) = self.regs.iter().find(|x| x.name == name) {
                 panic!("{} is already defined.\n", name)
@@ -134,7 +134,7 @@ impl CompilerState {
         self.regs.last().unwrap().clone()
     }
 
-    fn new_wire(&mut self, name: &str, bits: i32, idx: Option<i32>, expr: VExpr) -> VVar {
+    fn new_wire(&mut self, name: &str, bits: u32, idx: Option<u32>, expr: VExpr) -> VVar {
         let v = vvar(name, bits, idx);
         self.wires.push(vassign(v, &expr));
         self.wires.last().unwrap().lhs.clone()
@@ -215,7 +215,7 @@ fn ir_expr_to_vexpr(e: &Expr, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &
     }
 }
 
-fn rename_with_sched(a: &Arg, i: i32, deps: &IndexMap<Var, DepType>, dfg: &IndexMap<Var, DFGNode<Sched>>, ii: i32) -> Arg {
+fn rename_with_sched(a: &Arg, i: u32, deps: &IndexMap<Var, DepType>, dfg: &IndexMap<Var, DFGNode<Sched>>, ii: u32) -> Arg {
     match a {
         Arg::Val(n) => Arg::Val(n.clone()),
         Arg::Var(v) => {
@@ -233,7 +233,7 @@ fn rename_with_sched(a: &Arg, i: i32, deps: &IndexMap<Var, DepType>, dfg: &Index
     }
 }
 
-fn ir_expr_to_vexpr_with_sched(e: &Expr, i: i32, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &mut CompilerState, dfg: &IndexMap<Var, DFGNode<Sched>>, ii: i32) -> VExpr {
+fn ir_expr_to_vexpr_with_sched(e: &Expr, i: u32, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &mut CompilerState, dfg: &IndexMap<Var, DFGNode<Sched>>, ii: u32) -> VExpr {
     let deps = get_deps_of_expr(e, dfg).into_iter().collect::<IndexMap<Var, _>>();
     match e {
         Expr::Copy(a) =>
@@ -341,11 +341,11 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, init_actions:
     ]);
 }
 
-fn min_sched_time(dfg: &DFG<Sched>) -> i32 {
+fn min_sched_time(dfg: &DFG<Sched>) -> u32 {
     dfg.iter().map(|(_, node)| { node.sched.sched }).min().expect("Error: No nodes.\n")
 }
 
-fn max_sched_time(dfg: &DFG<Sched>) -> i32 {
+fn max_sched_time(dfg: &DFG<Sched>) -> u32 {
     dfg.iter().map(|(_, node)| { node.sched.sched }).max().expect("Error: No nodes.\n")
 }
 
@@ -373,7 +373,7 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
     let mut conds = vec![not_reset, en.to_vexpr()];
     let type_ = &Type {bits: nbits, signed: false};
 
-    let init_action = vassign(&cnt, val(min_time, type_.clone()));
+    let init_action = vassign(&cnt, val(min_time as i32, type_.clone()));
 
     let sched_stmts = create_stage_stmt_map(dfg);
 
@@ -381,7 +381,7 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
 
     for i in min_time..=max_time {
 
-        conds.push(veq(&cnt, val(i, type_.clone())));
+        conds.push(veq(&cnt, val(i as i32, type_.clone())));
         let mut actions = sched_stmts.get(&i).unwrap().iter().map(|stmt| {
             // TODO: is it correct to set II = 0?
             let rhs = ir_expr_to_vexpr_with_sched(&stmt.expr, i, None, prevs, cs, dfg, 0);
@@ -400,8 +400,8 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
     vec![init_action]
 }
 
-fn create_stage_stmt_map<'a>(dfg: &'a DFG<Sched>) -> IndexMap<i32, Vec<&'a Stmt>> {
-    let mut ret = IndexMap::<i32, Vec<&'a Stmt>>::new();
+fn create_stage_stmt_map<'a>(dfg: &'a DFG<Sched>) -> IndexMap<u32, Vec<&'a Stmt>> {
+    let mut ret = IndexMap::<u32, Vec<&'a Stmt>>::new();
     for (_v, node) in dfg {
         ret.entry(node.sched.sched).or_insert(vec![]).push(&node.stmt);
     };
@@ -412,13 +412,13 @@ fn is_loop_cond(s: &Stmt) -> bool {
     s.var.name == "loop_cond"
 }
 
-fn varr_at<T: ToVVar>(arr: T, idx: i32) -> VVar {
+fn varr_at<T: ToVVar>(arr: T, idx: u32) -> VVar {
     let v = arr.to_vvar();
     vvar(v.name, v.bits, Some(idx))
 }
 
 // Create pipe machine, and returns its initialization actions.
-fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs: &mut CompilerState) -> Vec<VAssign> {
+fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: u32, cs: &mut CompilerState) -> Vec<VAssign> {
     let min_stage = min_sched_time(dfg);
     let max_stage = max_sched_time(dfg);
     assert!(min_stage == 0);
@@ -443,7 +443,7 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
     let sched_stmts = create_stage_stmt_map(dfg);
 
     // stage, cond_wire (no delay), cond_reg (1cycle delay & remains false one cond_wire becomes false)
-    let mut loop_conds: Option<(i32, VVar, VVar)> = None;
+    let mut loop_conds: Option<(u32, VVar, VVar)> = None;
     // Generate datapath
     for (i, ss) in sched_stmts {
         conds.push(varr_at(&stage_en, i).to_vexpr());
@@ -480,7 +480,7 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
         let mut actions = vec![];
         // cnt <= cnt == ii ? 0 cnt + 1;
         actions.push(vassign(&cnt, vselect(
-            veq(&cnt, val(ii-1, uint(ii_nbits))),
+            veq(&cnt, val((ii - 1) as i32, uint(ii_nbits))),
             val(0, uint(ii_nbits)),
             vplus(&cnt, val(1, uint(ii_nbits)))
         )));
@@ -526,7 +526,7 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: i32, cs
     inits
 }
 
-fn gen_dfg_machine(l: &Label, dfgbb: &DFGBB<Sched, i32>, cs: &mut CompilerState) -> Vec<VAssign> {
+fn gen_dfg_machine(l: &Label, dfgbb: &DFGBB<Sched, u32>, cs: &mut CompilerState) -> Vec<VAssign> {
     match &dfgbb.body {
         DFGBBBody::Seq(dfg) => {
             gen_seq_machine(l, dfg, &dfgbb.prevs, cs)

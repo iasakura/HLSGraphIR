@@ -7,7 +7,7 @@ use indoc::indoc;
 
 use crate::types::*;
 
-fn make_var_decl(var_spec: &str, name: &str, bits: i32, arr_size: Option<i32>) -> String {
+fn make_var_decl(var_spec: &str, name: &str, bits: u32, arr_size: Option<u32>) -> String {
     let mut ret = var_spec.to_string();
     ret.push_str(" ");
     if bits != 1 {
@@ -22,7 +22,7 @@ fn make_var_decl(var_spec: &str, name: &str, bits: i32, arr_size: Option<i32>) -
 }
 
 struct Scope {
-    cur_tab: Rc<RefCell<i32>>
+    cur_tab: Rc<RefCell<u32>>
 }
 
 impl Drop for Scope {
@@ -33,7 +33,7 @@ impl Drop for Scope {
 }
 
 impl Scope {
-    fn new(cur_tab: Rc<RefCell<i32>>) -> Scope {
+    fn new(cur_tab: Rc<RefCell<u32>>) -> Scope {
         *cur_tab.borrow_mut() += 4;
         Scope {cur_tab}
     }
