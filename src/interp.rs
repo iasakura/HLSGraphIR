@@ -1,4 +1,5 @@
-use crate::types::*;
+use crate::ir_basic::*;
+use crate::cdfg_ir::*;
 use std::collections::HashMap;
 
 type Env = HashMap<String, i32>;
@@ -75,6 +76,7 @@ fn interp_terop(op: &TerOp, arg1: &Arg, arg2: &Arg, arg3: &Arg, env: &Env, _prev
 
 fn interp_expr(expr: &Expr, env: &Env, prev_index: i32, is_first: bool) -> i32 {
     match expr {
+        Expr::Call(_, _, _, _) => panic!("TODO: implement"),
         Expr::Copy (a) => interp_arg(a, env),
         Expr::UnExp(op, a) => interp_unop(op, a, env, prev_index, is_first),
         Expr::BinExp(op, a1, a2) => interp_binop(op, a1, a2, env, prev_index, is_first),

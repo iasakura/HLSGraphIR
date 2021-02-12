@@ -3,7 +3,8 @@ use std::io;
 use std::fs;
 use std::str;
 
-use crate::types::*;
+use crate::ir_basic::*;
+use crate::cdfg_ir::*;
 use crate::dfg;
 
 #[derive(Clone)]

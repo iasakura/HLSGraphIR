@@ -2,7 +2,6 @@
 extern crate hls_graph_ir;
 
 use hls_graph_ir::dsl;
-use hls_graph_ir::types;
 use hls_graph_ir::interp;
 
 // #![feature(trace_macros)]

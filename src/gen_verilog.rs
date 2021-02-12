@@ -5,7 +5,8 @@ use std::cell::RefCell;
 
 use indoc::indoc;
 
-use crate::types::*;
+use crate::ir_basic::*;
+use crate::verilog_ir::*;
 
 fn make_var_decl(var_spec: &str, name: &str, bits: u32, arr_size: Option<u32>) -> String {
     let mut ret = var_spec.to_string();

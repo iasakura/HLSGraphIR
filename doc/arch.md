@@ -38,40 +38,30 @@ args は wire
 ### External module
 
 ```rust
-port FIFO {
-    read() -> i32 {
-        latency: Variable,
-    }
+resource FIFO_i32 {
+    read() -> (i32) @ Variable,
+}
+
+resource ADDR {
+    call (int(32), int(32)) -> int(32) @ Combinatorial
+}
+
+resource BRAM_2P {
+    // Latency=II=1, 
+    read: (int(32)) -> int(32) @ Fixed(1, 1) 
+    // Latency=2, II=1
+    write: (int(32), int(32)) -> int(32) @ Fixed(2, 1)
 }
 
 cdfg sample {
     starts INIT;
     // Arguments are either scalar or port
-    params (n, port FIFO);
+    params (n: int(32), fifo: FIFO_i32);
     returns ret;
     resources {
         // internal module instantiation
-        module add_0(input clk, input )
-        module add_0 : ADDR {
-            call : (int(32), int(32)) -> int(32) {
-                latency: Fixed(0), // combinatorial logic
-                initiation_interval: 1
-            }
-        }
-        module bram_0 : BRAM_2P {
-            read: (int(32)) -> int(32) {
-                timing: {
-                    latency: Fixed(1), // sequential logic
-                    initiation_interval: 1
-                }
-            }
-            write: (int(32), int(32)) -> int(32) {
-                timing: {
-                    latency: Fixed(2),
-                    initiation_interval: 1
-                }
-            }
-        }
+        module add_0 : ADDR
+        module bram_0 : BRAM_2P 
     }
     cdfg {
         INIT: {
@@ -79,10 +69,25 @@ cdfg sample {
         } exit(jc(test0, LOOP, EXIT))
         LOOP(INIT) {
             sum = mu(0, sum);
-            sum_next = call add_0(i, sum)
+            sum_next = call add_0.call(i, sum)
+            v = call bram0.read(...)
+            w = call bram0.write(...) depends [v]
         } exit(jmp(EXIT))
         EXIT(INIT, LOOP) {
 
         } exit(ret)
     }
+```
+
+### Sum of array
+ 
+```rust
+module sum_of_array {
+    starts INIT,
+    params (n: int(32), arr: BRAM_2P),
+    returns ret,
+    resources {
+
+    },
+}
 ```

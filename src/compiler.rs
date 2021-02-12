@@ -1,14 +1,13 @@
-use crate::types::*;
-use crate::dfg;
+use crate::ir_basic::*;
+use crate::cdfg_ir::*;
+use crate::verilog_ir::*;
 
 use std::cmp;
-use std::io::{self, Write};
-use std::path::PathBuf;
-use std::process::Command;
-use std::rc::Rc;
+// use std::rc::Rc;
 use std::iter;
 
 use indexmap::map::IndexMap;
+#[warn(unused_imports)]
 use log::{debug, error, log_enabled, info, Level};
 
 const FINISH_STATE : &'static str = "__FINISH";
@@ -52,6 +51,9 @@ struct CompilerState {
     ens: IndexMap<Label, VVar>,
     dones: IndexMap<Label, VVar>,
     states: IndexMap<Label, VExpr>,
+
+    resource_types: IndexMap<String, ResourceType>,
+    local_resources: IndexMap<String, ResourceInterface>,
 }
 
 fn collect_vars<'a, SCHED, II>(dfgbb: &'a DFGBB<SCHED, II>) -> Vec<&'a Var> {
@@ -67,6 +69,35 @@ fn bits_of_states(n: u32) -> u32 {
     cmp::max(res, 1)
 }
 
+struct MethodInterface {
+    args: Vec<VVar>,
+    ret: Vec<VVar>,
+
+    en: Option<VVar>,
+    done: Option<VVar>,
+}
+
+struct ResourceInterface {
+    methods: Vec<MethodInterface>
+}
+
+fn create_local_resource(resources: &IndexMap<String, String>, resource_types: &IndexMap<String, ResourceType>) -> IndexMap<String, ResourceInterface> {
+    resources.iter().map(|(rec_name, type_name)| {
+        let rec_type = resource_types.get(type_name).unwrap();
+        let methods = rec_type.methods.iter().map( |(meth_name, method)| {
+            let args = method.inputs.iter().map( |arg_name| vvar(format!("{}_{}_{}_ret", rec_name, meth_name, arg_name.name), arg_name.type_.bits, None) ).collect::<Vec<_>>();
+            let ret = method.outputs.iter().map( |out_name| vvar(format!("{}_{}_{}_arg", rec_name, meth_name, out_name.name), out_name.type_.bits, None )).collect::<Vec<_>>();
+            let (en, done) = match method.timing {
+                Timing::Combinatorial => (None, None),
+                Timing::Fixed(_, _) => (Some (vvar(format!("{}_{}_en", rec_name, meth_name), 1, None)), None),
+                Timing::Variable => (Some (vvar(format!("{}_{}_en", rec_name, meth_name), 1, None)), Some (vvar(format!("{}_{}_done", rec_name, meth_name), 1, None)))
+            };
+            MethodInterface {args, ret, en, done}
+        }).collect::<Vec<_>>();
+        (rec_name.clone(), ResourceInterface {methods})
+    }).collect::<IndexMap<_, _>>()
+}
+
 impl CompilerState {
     fn init(ir: &SchedCDFGIR) -> CompilerState {
         // Create initial compiler state. 
@@ -79,12 +110,15 @@ impl CompilerState {
             start: vvar("dummy", 0, None),
             finish: vvar("dummy", 0, None),
             ens: IndexMap::new(), dones: IndexMap::new(), states: IndexMap::new(),
+
+            resource_types: ir.resource_types.clone(),
+            local_resources: create_local_resource(&ir.module.resources, &ir.resource_types)
         };
-        gen_verilog_io_signals(&ir.params, &ir.returns, &mut cs);
+        gen_verilog_io_signals(&ir.module.params, &ir.module.returns, &mut cs);
 
         // Create states for all CFG block & a final states
         let finish_state = FINISH_STATE.to_string();
-        let labels = ir.cdfg.iter().map(|(l, _)| l).chain(iter::once(&finish_state)).collect::<Vec<_>>();
+        let labels = ir.module.cdfg.iter().map(|(l, _)| l).chain(iter::once(&finish_state)).collect::<Vec<_>>();
 
         // TODO: bitwidth
         let nbits = bits_of_states(labels.len() as u32);
@@ -106,7 +140,7 @@ impl CompilerState {
             }
         }
         // Create all registers for all SSA variables
-        for (_l, dfgbb) in &ir.cdfg {
+        for (_l, dfgbb) in &ir.module.cdfg {
             let vars = collect_vars(&dfgbb);
             debug!("defined vars of {} = {:?}", _l, vars);
             for v in vars {
@@ -211,7 +245,8 @@ fn ir_expr_to_vexpr(e: &Expr, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &
         },
         Expr::TerExp(op, a1, a2, a3) => terexp(*op, ir_arg_to_vexpr(a1), ir_arg_to_vexpr(a2), ir_arg_to_vexpr(a3)),
         Expr::Copy(Arg::Val(n)) => n.to_vexpr(),
-        Expr::Copy(Arg::Var(v)) => var_to_vvar(v).to_vexpr()
+        Expr::Copy(Arg::Var(v)) => var_to_vvar(v).to_vexpr(),
+        Expr::Call(_, _, _, _) => panic!("TODO: implement")
     }
 }
 
@@ -236,6 +271,7 @@ fn rename_with_sched(a: &Arg, i: u32, deps: &IndexMap<Var, DepType>, dfg: &Index
 fn ir_expr_to_vexpr_with_sched(e: &Expr, i: u32, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &mut CompilerState, dfg: &IndexMap<Var, DFGNode<Sched>>, ii: u32) -> VExpr {
     let deps = get_deps_of_expr(e, dfg).into_iter().collect::<IndexMap<Var, _>>();
     match e {
+        Expr::Call(_, _, _, _) => panic!("TODO: implement"),
         Expr::Copy(a) =>
             ir_expr_to_vexpr(&Expr::Copy(rename_with_sched(a, i, &deps, dfg, ii)), is_first, prevs, cs),
         Expr::UnExp(op, a) =>
@@ -255,7 +291,7 @@ fn make_rst_n() -> VVar {
 }
 
 // Create CFG state machine and returs en/done signals 
-fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, init_actions: &IndexMap<Label, Vec<VAssign>>) {
+fn gen_cfg_state_machine(module: &SchedCDFGModule, cs: &mut CompilerState, init_actions: &IndexMap<Label, Vec<VAssign>>) {
     // make CFG FSM
     let rst_n = make_rst_n();
 
@@ -264,7 +300,7 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, init_actions:
 
     // State machine init
     {
-        let start = &ir.start;
+        let start = &module.start;
         let start_state = get(&cs.states, &start);
         let mut assigns = Vec::<VAssign>::new();
         assigns.push(vassign(&cs.cur_state, start_state));
@@ -278,7 +314,7 @@ fn gen_cfg_state_machine(ir: &SchedCDFGIR, cs: &mut CompilerState, init_actions:
         cs.add_event(reset, assigns);
     }
 
-    for (l, bb) in &ir.cdfg {
+    for (l, bb) in &module.cdfg {
         let l_state = get(&cs.states, l);
         let l_done = get(&cs.dones, l);
         let l_en = get(&cs.ens, l);
@@ -537,20 +573,20 @@ fn gen_dfg_machine(l: &Label, dfgbb: &DFGBB<Sched, u32>, cs: &mut CompilerState)
     }
 }
 
-fn gen_verilog_definitions(ir: &SchedCDFGIR, cs: &mut CompilerState) {
+fn gen_verilog_definitions(module: &SchedCDFGModule, cs: &mut CompilerState) {
     let mut init_actions = IndexMap::<Label, Vec<VAssign>>::new();
-    for (l, dfgbb) in &ir.cdfg {
+    for (l, dfgbb) in &module.cdfg {
         debug!("Generate label {}", l);
         let actions = gen_dfg_machine(&l, &dfgbb, cs);
         init_actions.insert(String::from(l), actions);
     }
-    gen_cfg_state_machine(ir, cs, &init_actions);
+    gen_cfg_state_machine(module, cs, &init_actions);
 }
 
 pub fn compile_sched_cdfg_ir(ir: &SchedCDFGIR) ->VerilogIR {
-    let name = &ir.name;
+    let name = &ir.module.name;
     let mut cs = CompilerState::init(&ir);
-    gen_verilog_definitions(ir, &mut cs);
+    gen_verilog_definitions(&ir.module, &mut cs);
     VerilogIR { 
         name: name.clone(), 
         localparams: cs.localparams, 
@@ -569,6 +605,11 @@ mod tests {
 
     use super::*;
 
+    use std::path::PathBuf;
+    use std::process::Command;
+    use std::io::{self, Write};
+
+    use crate::dfg;
     use crate::gen_verilog;
     use crate::gen_graphviz;
 
@@ -577,11 +618,11 @@ mod tests {
     }
     
     fn run_test(ir: &SchedCDFGIR) {
-        let name = &ir.name;
+        let name = &ir.module.name;
         let verilog = compile_sched_cdfg_ir(ir);
         gen_verilog::generate_verilog_to_file(&verilog, &format!("./test/{}/{}.v", name, name));
 
-        for (l, dfg) in &ir.cdfg {
+        for (l, dfg) in &ir.module.cdfg {
             match &dfg.body {
                 DFGBBBody::Seq(dfg) | DFGBBBody::Pipe(dfg, _) => 
                     gen_graphviz::gen_graphviz_from_dfg(dfg, &format!("./test/{}/{}.dot", name, l))
@@ -664,11 +705,15 @@ mod tests {
 
 
         let ir = GenCDFGIR {
-            name: String::from("collatz"),
-            start: String::from("INIT"),
-            params: vec![Var {name: String::from("n"), type_: int(32)}],
-            cdfg,
-            returns: vec![Var {name: String::from("step"), type_: int(32)}],
+            resource_types: IndexMap::new(),
+            module: GenCDFGModule {
+                name: String::from("collatz"),
+                start: String::from("INIT"),
+                params: vec![Var {name: String::from("n"), type_: int(32)}],
+                resources: IndexMap::new(),
+                cdfg,
+                returns: vec![Var {name: String::from("step"), type_: int(32)}],
+            }
         };
 
         run_test(&ir);
@@ -776,11 +821,15 @@ mod tests {
         ].into_iter().collect::<IndexMap<_, _>>();
 
         let ir = GenCDFGIR {
-            name: "collatz_ii1".to_string(),
-            start: label("INIT0"),
-            params: vec![n.clone()],
-            cdfg,
-            returns: vec![res.clone()]
+            resource_types: IndexMap::new(),
+            module: GenCDFGModule {
+                name: "collatz_ii1".to_string(),
+                start: label("INIT0"),
+                params: vec![n.clone()],
+                resources: IndexMap::new(),
+                cdfg,
+                returns: vec![res.clone()]
+            }
         };
 
         run_test(&ir);
@@ -799,38 +848,42 @@ mod tests {
         let loop_cond = &var("loop_cond", int(1));
 
         let ir = GenCDFGIR {
-            name: "sum_of_square".to_string(),
-            start: label("INIT"),
-            params: vec![n.clone()],
-            cdfg: vec![
-                (label("INIT"), DFGBB {
-                    prevs: vec![],
-                    body: DFGBBBody::Seq(dfg!{
-                        test0 <- gt(n, val(0, int(32))), 0;
+            resource_types: IndexMap::new(),
+            module: GenCDFGModule {
+                name: "sum_of_square".to_string(),
+                start: label("INIT"),
+                params: vec![n.clone()],
+                resources: IndexMap::new(),
+                cdfg: vec![
+                    (label("INIT"), DFGBB {
+                        prevs: vec![],
+                        body: DFGBBBody::Seq(dfg!{
+                            test0 <- gt(n, val(0, int(32))), 0;
+                        }),
+                        exit: jc(test0, label("LOOP"), label("EXIT"))
                     }),
-                    exit: jc(test0, label("LOOP"), label("EXIT"))
-                }),
-                (label("LOOP"), DFGBB {
-                    prevs: vec![label("INIT")],
-                    body: DFGBBBody::Pipe(dfg!{
-                        i <- mu(val(1, int(32)), i_next), 0;
-                        sum <- mu(val(0, int(32)), sum_next), 1;
-                        i_next <- plus(i, val(1, int(32))), 1;
-                        mul <- mult(i, i), 1;
-                        sum_next <- plus(sum, mul), 2;
-                        loop_cond <- le(i_next, n), 1;
-                    }, 2),
-                    exit: jmp(label("EXIT"))
-                }),
-                (label("EXIT"), DFGBB {
-                    prevs: vec![label("INIT"), label("LOOP")],
-                    body: DFGBBBody::Seq(dfg!{
-                        res <- ita(val(0, int(32)), sum_next), 0;
+                    (label("LOOP"), DFGBB {
+                        prevs: vec![label("INIT")],
+                        body: DFGBBBody::Pipe(dfg!{
+                            i <- mu(val(1, int(32)), i_next), 0;
+                            sum <- mu(val(0, int(32)), sum_next), 1;
+                            i_next <- plus(i, val(1, int(32))), 1;
+                            mul <- mult(i, i), 1;
+                            sum_next <- plus(sum, mul), 2;
+                            loop_cond <- le(i_next, n), 1;
+                        }, 2),
+                        exit: jmp(label("EXIT"))
                     }),
-                    exit: ret()
-                })
-            ].into_iter().collect::<IndexMap<_, _>>(),
-            returns: vec![res.clone()],
+                    (label("EXIT"), DFGBB {
+                        prevs: vec![label("INIT"), label("LOOP")],
+                        body: DFGBBBody::Seq(dfg!{
+                            res <- ita(val(0, int(32)), sum_next), 0;
+                        }),
+                        exit: ret()
+                    })
+                ].into_iter().collect::<IndexMap<_, _>>(),
+                returns: vec![res.clone()],
+            }
         };
 
         run_test(&ir);
@@ -850,39 +903,43 @@ mod tests {
         let loop_cond = &var("loop_cond", int(1));
 
         let ir = GenCDFGIR {
-            name: "sum_of_square_ii1".to_string(),
-            start: label("INIT"),
-            params: vec![n.clone()],
-            cdfg: vec![
-                (label("INIT"), DFGBB {
-                    prevs: vec![],
-                    body: DFGBBBody::Seq(dfg!{
-                        test0 <- gt(n, val(0, int(32))), 0;
+            resource_types: IndexMap::new(),
+            module: GenCDFGModule {
+                name: "sum_of_square_ii1".to_string(),
+                start: label("INIT"),
+                params: vec![n.clone()],
+                resources: IndexMap::new(),
+                cdfg: vec![
+                    (label("INIT"), DFGBB {
+                        prevs: vec![],
+                        body: DFGBBBody::Seq(dfg!{
+                            test0 <- gt(n, val(0, int(32))), 0;
+                        }),
+                        exit: jc(test0, label("LOOP"), label("EXIT"))
                     }),
-                    exit: jc(test0, label("LOOP"), label("EXIT"))
-                }),
-                (label("LOOP"), DFGBB {
-                    prevs: vec![label("INIT")],
-                    body: DFGBBBody::Pipe(dfg!{
-                        i <- mu(val(1, int(32)), i_next), 0;
-                        sum <- mu(val(0, int(32)), sum_next), 2;
-                        i_next <- plus(i, val(1, int(32))), 0;
-                        mul <- mult(i, i), 1;
-                        mul_2 <- copy(mul), 2;
-                        sum_next <- plus(sum, mul_2), 3;
-                        loop_cond <- le(i_next, n), 0;
-                    }, 1),
-                    exit: jmp(label("EXIT"))
-                }),
-                (label("EXIT"), DFGBB {
-                    prevs: vec![label("INIT"), label("LOOP")],
-                    body: DFGBBBody::Seq(dfg!{
-                        res <- ita(val(0, int(32)), sum_next), 0;
+                    (label("LOOP"), DFGBB {
+                        prevs: vec![label("INIT")],
+                        body: DFGBBBody::Pipe(dfg!{
+                            i <- mu(val(1, int(32)), i_next), 0;
+                            sum <- mu(val(0, int(32)), sum_next), 2;
+                            i_next <- plus(i, val(1, int(32))), 0;
+                            mul <- mult(i, i), 1;
+                            mul_2 <- copy(mul), 2;
+                            sum_next <- plus(sum, mul_2), 3;
+                            loop_cond <- le(i_next, n), 0;
+                        }, 1),
+                        exit: jmp(label("EXIT"))
                     }),
-                    exit: ret()
-                })
-            ].into_iter().collect::<IndexMap<_, _>>(),
-            returns: vec![res.clone()],
+                    (label("EXIT"), DFGBB {
+                        prevs: vec![label("INIT"), label("LOOP")],
+                        body: DFGBBBody::Seq(dfg!{
+                            res <- ita(val(0, int(32)), sum_next), 0;
+                        }),
+                        exit: ret()
+                    })
+                ].into_iter().collect::<IndexMap<_, _>>(),
+                returns: vec![res.clone()],
+            }
         };
 
         run_test(&ir);
@@ -904,42 +961,46 @@ mod tests {
         let loop_cond = &var("loop_cond", int(1));
 
         let ir = GenCDFGIR {
-            name: "sum_of_square_plus_i".to_string(),
-            start: label("INIT"),
-            params: vec![n.clone()],
-            cdfg: vec![
-                (label("INIT"), DFGBB {
-                    prevs: vec![],
-                    body: DFGBBBody::Seq(dfg!{
-                        test0 <- gt(n, val(0, int(32))), 0;
+            resource_types: IndexMap::new(),
+            module: GenCDFGModule {
+                name: "sum_of_square_plus_i".to_string(),
+                start: label("INIT"),
+                params: vec![n.clone()],
+                resources: IndexMap::new(),
+                cdfg: vec![
+                    (label("INIT"), DFGBB {
+                        prevs: vec![],
+                        body: DFGBBBody::Seq(dfg!{
+                            test0 <- gt(n, val(0, int(32))), 0;
+                        }),
+                        exit: jc(test0, label("LOOP"), label("EXIT"))
                     }),
-                    exit: jc(test0, label("LOOP"), label("EXIT"))
-                }),
-                (label("LOOP"), DFGBB {
-                    prevs: vec![label("INIT")],
-                    body: DFGBBBody::Pipe(dfg!{
-                        i <- mu(val(1, int(32)), i_next), 0;
-                        sum <- mu(val(0, int(32)), sum_next), 2;
-                        i_next <- plus(i, val(1, int(32))), 0;
-                        mul <- mult(i, i), 1;
-                        // Here we should read value of i from prev-stage (i.e., stage 1.)
-                        // i_copy <- copy(i), 1;
-                        // pls <- plus(mul, i_copy), 2;
-                        pls <- plus(mul, i), 2;
-                        sum_next <- plus(sum, pls), 3;
-                        loop_cond <- le(i_next, n), 0;
-                    }, 1),
-                    exit: jmp(label("EXIT"))
-                }),
-                (label("EXIT"), DFGBB {
-                    prevs: vec![label("INIT"), label("LOOP")],
-                    body: DFGBBBody::Seq(dfg!{
-                        res <- ita(val(0, int(32)), sum_next), 0;
+                    (label("LOOP"), DFGBB {
+                        prevs: vec![label("INIT")],
+                        body: DFGBBBody::Pipe(dfg!{
+                            i <- mu(val(1, int(32)), i_next), 0;
+                            sum <- mu(val(0, int(32)), sum_next), 2;
+                            i_next <- plus(i, val(1, int(32))), 0;
+                            mul <- mult(i, i), 1;
+                            // Here we should read value of i from prev-stage (i.e., stage 1.)
+                            // i_copy <- copy(i), 1;
+                            // pls <- plus(mul, i_copy), 2;
+                            pls <- plus(mul, i), 2;
+                            sum_next <- plus(sum, pls), 3;
+                            loop_cond <- le(i_next, n), 0;
+                        }, 1),
+                        exit: jmp(label("EXIT"))
                     }),
-                    exit: ret()
-                })
-            ].into_iter().collect::<IndexMap<_, _>>(),
-            returns: vec![res.clone()],
+                    (label("EXIT"), DFGBB {
+                        prevs: vec![label("INIT"), label("LOOP")],
+                        body: DFGBBBody::Seq(dfg!{
+                            res <- ita(val(0, int(32)), sum_next), 0;
+                        }),
+                        exit: ret()
+                    })
+                ].into_iter().collect::<IndexMap<_, _>>(),
+                returns: vec![res.clone()],
+            }
         };
 
         run_test(&ir);
