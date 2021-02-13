@@ -3,9 +3,9 @@ use std::io;
 use std::rc::Rc;
 use std::cell::RefCell;
 
+use indexmap::map::IndexMap;
 use indoc::indoc;
 
-use crate::ir_basic::*;
 use crate::verilog_ir::*;
 
 fn make_var_decl(var_spec: &str, name: &str, bits: u32, arr_size: Option<u32>) -> String {
@@ -89,11 +89,13 @@ pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
         for v in &ir.regs {
             genstmt!("{}", make_var_decl("reg", &v.name, v.bits, v.idx));
         }
-        for w in &ir.wires {
-            genstmt!("{}", make_var_decl("wire", &w.lhs.name, w.lhs.bits, None));
+        for (var, rhs) in &ir.wires {
+            genstmt!("{}", make_var_decl("wire", &var.name, var.bits, None));
         }
-        for w in &ir.wires {
-            genstmt!("assign {} = {}", w.lhs, w.rhs);
+        for (var, rhs) in &ir.wires {
+            if let Some(rhs) = rhs {
+                genstmt!("assign {} = {}", var, rhs);
+            }
         }
         for a in &ir.always {
             genln!("always @(posedge {}) begin", a.clk.name);
@@ -121,6 +123,8 @@ pub fn generate_verilog_to_file(ir: &VerilogIR, filename: &str) {
 
 #[test]
 fn generate_verilog_test() {
+    use crate::ir_basic::*;
+
     let mut vec: Vec<u8> = Vec::new();
     let ir = VerilogIR {
         name: String::from("test_module"),
@@ -140,9 +144,9 @@ fn generate_verilog_test() {
             vvar("b", 64, None)
         ],
         wires: vec![
-            vassign(vvar("c", 32, None), vplus(vvar("a", 32, Some(0)), val(1, int(32)))
+            (vvar("c", 32, None), Some(vplus(vvar("a", 32, Some(0)), val(1, int(32))))
             )
-        ],
+        ].into_iter().collect::<IndexMap<_, _>>(),
         always: vec![
             VAlways {
                 clk: vvar("clk", 1, None),

@@ -5,7 +5,7 @@ use indexmap::map::IndexMap;
 
 use crate::ir_basic::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct VVar {
     pub name: String,
     pub bits: u32,
@@ -212,6 +212,6 @@ pub struct VerilogIR {
     pub localparams: Vec<(VVar, i32)>,
     pub io_signals: Vec<(VVar, IOType)>,
     pub regs: Vec<VVar>,
-    pub wires: Vec<VAssign>,
+    pub wires: IndexMap<VVar, Option<VExpr>>,
     pub always: Vec<VAlways>,
 }

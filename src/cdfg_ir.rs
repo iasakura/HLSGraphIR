@@ -2,6 +2,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use indexmap::map::IndexMap;
+use indexmap::set::IndexSet;
 
 use crate::ir_basic::*;
 
@@ -300,11 +301,19 @@ pub enum Timing {
     Variable,
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum Signal {
+    Enable,
+    Done,
+    Continue
+}
+
 #[derive(Debug, Clone)]
 pub struct Method {
     pub inputs: Vec<Var>,
     pub outputs: Vec<Var>,
     pub timing: Timing,
+    pub interface_signal: IndexSet<Signal>
 }
 
 #[derive(Debug, Clone)]

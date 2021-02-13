@@ -7,7 +7,6 @@ use std::cmp;
 use std::iter;
 
 use indexmap::map::IndexMap;
-#[warn(unused_imports)]
 use log::{debug, error, log_enabled, info, Level};
 
 const FINISH_STATE : &'static str = "__FINISH";
@@ -35,11 +34,33 @@ fn gen_verilog_io_signals(ir_params: &Vec<Var>, ir_returns: &Vec<Var>, cs: &mut 
     cs.finish = vvar(finish, 1, None);
 }
 
+// struct ModuleInstantiation {
+//     name: String,
+//     args: Vec<VVar>,
+// }
+
+type ExMux = Vec<(VExpr, VVar)>;
+
+struct MethodInterface {
+    args: Vec<VVar>,
+    ret: Vec<VVar>,
+
+    en: Option<VVar>,
+    done: Option<VVar>,
+    cont: Option<VVar>,
+}
+
+struct ResourceInterface {
+    methods: IndexMap<String, MethodInterface>
+}
+
 struct CompilerState {
     io: Vec<(VVar, IOType)>,
     localparams: Vec<(VVar, i32)>,
     regs: Vec<VVar>,
-    wires : Vec<VAssign>,
+    wires : IndexMap<VVar, Option<VExpr>>,
+    // Exclusive multiplexer
+    ex_mux: IndexMap<VVar, ExMux>,
     always: Vec<VAlways>,
 
     cur_state: VVar,
@@ -53,7 +74,9 @@ struct CompilerState {
     states: IndexMap<Label, VExpr>,
 
     resource_types: IndexMap<String, ResourceType>,
-    local_resources: IndexMap<String, ResourceInterface>,
+    resources: IndexMap<String, ResourceInterface>,
+
+    // module_instantiations: Vec<ModuleInstantiation>,
 }
 
 fn collect_vars<'a, SCHED, II>(dfgbb: &'a DFGBB<SCHED, II>) -> Vec<&'a Var> {
@@ -69,32 +92,37 @@ fn bits_of_states(n: u32) -> u32 {
     cmp::max(res, 1)
 }
 
-struct MethodInterface {
-    args: Vec<VVar>,
-    ret: Vec<VVar>,
-
-    en: Option<VVar>,
-    done: Option<VVar>,
-}
-
-struct ResourceInterface {
-    methods: Vec<MethodInterface>
-}
-
-fn create_local_resource(resources: &IndexMap<String, String>, resource_types: &IndexMap<String, ResourceType>) -> IndexMap<String, ResourceInterface> {
-    resources.iter().map(|(rec_name, type_name)| {
-        let rec_type = resource_types.get(type_name).unwrap();
-        let methods = rec_type.methods.iter().map( |(meth_name, method)| {
-            let args = method.inputs.iter().map( |arg_name| vvar(format!("{}_{}_{}_ret", rec_name, meth_name, arg_name.name), arg_name.type_.bits, None) ).collect::<Vec<_>>();
-            let ret = method.outputs.iter().map( |out_name| vvar(format!("{}_{}_{}_arg", rec_name, meth_name, out_name.name), out_name.type_.bits, None )).collect::<Vec<_>>();
-            let (en, done) = match method.timing {
-                Timing::Combinatorial => (None, None),
-                Timing::Fixed(_, _) => (Some (vvar(format!("{}_{}_en", rec_name, meth_name), 1, None)), None),
-                Timing::Variable => (Some (vvar(format!("{}_{}_en", rec_name, meth_name), 1, None)), Some (vvar(format!("{}_{}_done", rec_name, meth_name), 1, None)))
+fn create_resource(resources: &IndexMap<String, String>, resource_types: &IndexMap<String, ResourceType>, cs: &mut CompilerState) -> IndexMap<String, ResourceInterface> {
+    // For each resources (resource_name, resource_type_name)
+    resources.iter().map(|(res_name, type_name)| {
+        let res_type = resource_types.get(type_name).unwrap();
+        // For each methods in the resource
+        let methods = res_type.methods.iter().map( |(meth_name, method)| {
+            let prefix = format!("{}_{}", res_name, meth_name);
+            let args = method.inputs.iter().map( |arg_name| 
+                cs.new_wire(&format!("{}_{}_arg", prefix, arg_name.name), arg_name.type_.bits, None)
+            ).collect::<Vec<_>>();
+            let ret = method.outputs.iter().map( |out_name| 
+                cs.new_wire(&format!("{}_{}_ret", prefix, out_name.name), out_name.type_.bits, None)
+            ).collect::<Vec<_>>();
+            let en = if method.interface_signal.contains(&Signal::Enable) {
+                Some (cs.new_wire(&format!("{}_en", &prefix), 1, None))
+            } else {
+                None
             };
-            MethodInterface {args, ret, en, done}
-        }).collect::<Vec<_>>();
-        (rec_name.clone(), ResourceInterface {methods})
+            let done = if method.interface_signal.contains(&Signal::Enable) {
+                Some (cs.new_wire(&format!("{}_done", &prefix), 1, None))
+            } else {
+                None
+            };
+            let cont = if method.interface_signal.contains(&Signal::Enable) {
+                Some (cs.new_wire(&format!("{}_cont", &prefix), 1, None))
+            } else {
+                None
+            };
+            (meth_name.clone(), MethodInterface {args, ret, en, done, cont})
+        }).collect::<IndexMap<_, _>>();
+        (res_name.clone(), ResourceInterface {methods})
     }).collect::<IndexMap<_, _>>()
 }
 
@@ -104,7 +132,7 @@ impl CompilerState {
         // Don't forget to update cur_state/prev_state!
         let mut cs = CompilerState { 
             io: vec![],
-            localparams: vec![], regs: vec![], wires: vec![], always: vec![],
+            localparams: vec![], regs: vec![], wires: IndexMap::new(), always: vec![], ex_mux: IndexMap::new(),
             cur_state: vvar("dummy", 0, None),
             prev_state: vvar("dummy", 0, None),
             start: vvar("dummy", 0, None),
@@ -112,8 +140,9 @@ impl CompilerState {
             ens: IndexMap::new(), dones: IndexMap::new(), states: IndexMap::new(),
 
             resource_types: ir.resource_types.clone(),
-            local_resources: create_local_resource(&ir.module.resources, &ir.resource_types)
+            resources: IndexMap::new(),
         };
+        cs.resources = create_resource(&ir.module.resources, &ir.resource_types, &mut cs);
         gen_verilog_io_signals(&ir.module.params, &ir.module.returns, &mut cs);
 
         // Create states for all CFG block & a final states
@@ -168,10 +197,30 @@ impl CompilerState {
         self.regs.last().unwrap().clone()
     }
 
-    fn new_wire(&mut self, name: &str, bits: u32, idx: Option<u32>, expr: VExpr) -> VVar {
+    fn new_wire(&mut self, name: &str, bits: u32, idx: Option<u32>) -> VVar {
         let v = vvar(name, bits, idx);
-        self.wires.push(vassign(v, &expr));
-        self.wires.last().unwrap().lhs.clone()
+        self.wires.insert(v.clone(), None);
+        v
+    }
+
+    fn assign(&mut self, v: &VVar, expr: VExpr) {
+        *self.wires.get_mut(v).expect(&format!("Variable {} is not found.", v)) = Some(expr);
+    }
+
+    fn new_assign(&mut self, name: &str, bits: u32, idx: Option<u32>, expr: VExpr) -> VVar {
+        let v = vvar(name, bits, idx);
+        self.wires.insert(v.clone(), Some(expr));
+        v
+    }
+
+    fn new_ex_mux(&mut self, name: &str, bits: u32, idx: Option<u32>) -> VVar {
+        let v = vvar(name, bits, idx);
+        self.ex_mux.insert(v.clone(), vec![]);
+        v
+    }
+
+    fn add_case_to_ex_mut(&mut self, vvar: &VVar, cond: &VExpr, var: &VVar) {
+        self.ex_mux.get_mut(vvar).expect(&format!("Var {} is not found", vvar.name)).push((cond.clone(), var.clone()));
     }
 
     fn add_event(&mut self, cond: VExpr, assigns: Vec<VAssign>) {
@@ -246,7 +295,11 @@ fn ir_expr_to_vexpr(e: &Expr, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &
         Expr::TerExp(op, a1, a2, a3) => terexp(*op, ir_arg_to_vexpr(a1), ir_arg_to_vexpr(a2), ir_arg_to_vexpr(a3)),
         Expr::Copy(Arg::Val(n)) => n.to_vexpr(),
         Expr::Copy(Arg::Var(v)) => var_to_vvar(v).to_vexpr(),
-        Expr::Call(_, _, _, _) => panic!("TODO: implement")
+        Expr::Call(module, meth, args, deps) => {
+            let method = cs.resources.get(module).expect(&format!("Module {} is not found", module)).methods
+                .get(meth).expect(&format!("Method {} in Module {} is not found", meth, module));
+            (&method.ret[0]).to_vexpr()
+        }
     }
 }
 
@@ -385,11 +438,11 @@ fn max_sched_time(dfg: &DFG<Sched>) -> u32 {
     dfg.iter().map(|(_, node)| { node.sched.sched }).max().expect("Error: No nodes.\n")
 }
 
-fn compile_stmt_to_vassign(stmt: &Stmt, prevs: &Vec<Label>, cs: &CompilerState) -> VAssign {
-    let vvar = ir_var_to_vvar(&stmt.var);
-    let vexpr = ir_expr_to_vexpr(&stmt.expr, None, prevs, cs);
-    VAssign { lhs: vvar, rhs: vexpr }
-}
+// fn compile_stmt_to_vassign(stmt: &Stmt, prevs: &Vec<Label>, cs: &CompilerState) -> VAssign {
+//     let vvar = ir_var_to_vvar(&stmt.var);
+//     let vexpr = ir_expr_to_vexpr(&stmt.expr, None, prevs, cs);
+//     VAssign { lhs: vvar, rhs: vexpr }
+// }
 
 // Create seq machine, and returns its initialization actions.
 fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut CompilerState) -> Vec<VAssign> {
@@ -422,7 +475,7 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
             // TODO: is it correct to set II = 0?
             let rhs = ir_expr_to_vexpr_with_sched(&stmt.expr, i, None, prevs, cs, dfg, 0);
             let var = ir_var_to_vvar(&stmt.var);
-            let wire = cs.new_wire(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
+            let wire = cs.new_assign(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
             vassign(var, wire)
         }).collect::<Vec<_>>();
         // Finalizations
@@ -488,14 +541,14 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: u32, cs
             let var = ir_var_to_vvar(&s.var);
             if is_loop_cond(s) {
                 let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&varr_at(&stage_is_first, i)), prevs, cs, dfg, ii);
-                let wire = cs.new_wire(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
+                let wire = cs.new_assign(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
                 let loop_cond_reg = cs.new_reg(&format!("{}_loop_cond", l), 1, None);
                 inits.push(vassign(&loop_cond_reg, TRUE));
                 actions.push(vassign(&loop_cond_reg, vand(&loop_cond_reg, &wire)));
                 loop_conds = Some((i, wire.clone(), loop_cond_reg.clone()));
             } else {
                 let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&varr_at(&stage_is_first, i)), prevs, cs, dfg, ii);
-                let wire = cs.new_wire(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
+                let wire = cs.new_assign(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
                 actions.push(vassign(var, wire));
             }
         }
@@ -551,7 +604,7 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: u32, cs
             let stage_all_disabled_expr = all_true(&(min_stage..=max_stage).map(|i| 
                 vnot(varr_at(&stage_en, i))
             ).collect::<Vec<_>>());
-            let stage_all_disabled = cs.new_wire(&format!("{}_stage_all_disabled", l), 1, None, stage_all_disabled_expr);
+            let stage_all_disabled = cs.new_assign(&format!("{}_stage_all_disabled", l), 1, None, stage_all_disabled_expr);
             cs.add_event(all_true(&conds), vec![vassign (
                 get(&cs.dones, l),
                 vand(vnot(&is_first), vand(vnot(loop_cond_reg), stage_all_disabled))
@@ -948,6 +1001,67 @@ mod tests {
     // Test case with access across stages with distance > 1
     #[test]
     fn sum_of_square_plus_i() {
+        let n = &var("n", int(32));
+        let test0 = &var("test0", uint(1));
+        let res = &var("res", int(32));
+        let i = &var("i", int(32));
+        // let i_copy = &var("i_copy", int(32));
+        let i_next = &var("i_next", int(32));
+        let mul = &var("mul", int(32));
+        let pls = &var("pls", int(32));
+        let sum = &var("sum", int(32));
+        let sum_next = &var("sum_next", int(32));
+        let loop_cond = &var("loop_cond", int(1));
+
+        let ir = GenCDFGIR {
+            resource_types: IndexMap::new(),
+            module: GenCDFGModule {
+                name: "sum_of_square_plus_i".to_string(),
+                start: label("INIT"),
+                params: vec![n.clone()],
+                resources: IndexMap::new(),
+                cdfg: vec![
+                    (label("INIT"), DFGBB {
+                        prevs: vec![],
+                        body: DFGBBBody::Seq(dfg!{
+                            test0 <- gt(n, val(0, int(32))), 0;
+                        }),
+                        exit: jc(test0, label("LOOP"), label("EXIT"))
+                    }),
+                    (label("LOOP"), DFGBB {
+                        prevs: vec![label("INIT")],
+                        body: DFGBBBody::Pipe(dfg!{
+                            i <- mu(val(1, int(32)), i_next), 0;
+                            sum <- mu(val(0, int(32)), sum_next), 2;
+                            i_next <- plus(i, val(1, int(32))), 0;
+                            mul <- mult(i, i), 1;
+                            // Here we should read value of i from prev-stage (i.e., stage 1.)
+                            // i_copy <- copy(i), 1;
+                            // pls <- plus(mul, i_copy), 2;
+                            pls <- plus(mul, i), 2;
+                            sum_next <- plus(sum, pls), 3;
+                            loop_cond <- le(i_next, n), 0;
+                        }, 1),
+                        exit: jmp(label("EXIT"))
+                    }),
+                    (label("EXIT"), DFGBB {
+                        prevs: vec![label("INIT"), label("LOOP")],
+                        body: DFGBBBody::Seq(dfg!{
+                            res <- ita(val(0, int(32)), sum_next), 0;
+                        }),
+                        exit: ret()
+                    })
+                ].into_iter().collect::<IndexMap<_, _>>(),
+                returns: vec![res.clone()],
+            }
+        };
+
+        run_test(&ir);
+    }
+
+    // Test case with access across stages with distance > 1
+    #[test]
+    fn resource_share1() {
         let n = &var("n", int(32));
         let test0 = &var("test0", uint(1));
         let res = &var("res", int(32));
