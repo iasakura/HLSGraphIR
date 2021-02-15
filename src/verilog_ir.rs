@@ -207,9 +207,16 @@ pub struct VAlways {
 }
 
 #[derive(Debug)]
+pub struct ModuleInstantiation {
+    pub name: String, 
+    pub args: Vec<VVar>
+}
+
+#[derive(Debug)]
 pub struct VerilogIR {
     pub name: String,
     pub localparams: Vec<(VVar, i32)>,
+    pub module_instantiations: Vec<ModuleInstantiation>,
     pub io_signals: Vec<(VVar, IOType)>,
     pub regs: Vec<VVar>,
     pub wires: IndexMap<VVar, Option<VExpr>>,

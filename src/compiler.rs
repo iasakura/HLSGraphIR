@@ -92,9 +92,10 @@ fn bits_of_states(n: u32) -> u32 {
     cmp::max(res, 1)
 }
 
-fn create_resource(resources: &IndexMap<String, String>, resource_types: &IndexMap<String, ResourceType>, cs: &mut CompilerState) -> IndexMap<String, ResourceInterface> {
+fn create_resource(resources: &IndexMap<String, String>, ports: &Vec<(String, String)>, resource_types: &IndexMap<String, ResourceType>, cs: &mut CompilerState) -> IndexMap<String, ResourceInterface> {
     // For each resources (resource_name, resource_type_name)
-    resources.iter().map(|(res_name, type_name)| {
+    let all_resources = resources.iter().chain(ports.iter().map(|tup| (&tup.0, &tup.1)));
+    all_resources.map(|(res_name, type_name)| {
         let res_type = resource_types.get(type_name).unwrap();
         // For each methods in the resource
         let methods = res_type.methods.iter().map( |(meth_name, method)| {
@@ -129,7 +130,7 @@ fn create_resource(resources: &IndexMap<String, String>, resource_types: &IndexM
 impl CompilerState {
     fn init(ir: &SchedCDFGIR) -> CompilerState {
         // Create initial compiler state. 
-        // Don't forget to update cur_state/prev_state!
+        // Don't forget to update dummy variables.
         let mut cs = CompilerState { 
             io: vec![],
             localparams: vec![], regs: vec![], wires: IndexMap::new(), always: vec![], ex_mux: IndexMap::new(),
@@ -142,7 +143,7 @@ impl CompilerState {
             resource_types: ir.resource_types.clone(),
             resources: IndexMap::new(),
         };
-        cs.resources = create_resource(&ir.module.resources, &ir.resource_types, &mut cs);
+        cs.resources = create_resource(&ir.module.resources, &ir.module.ports, &ir.resource_types, &mut cs);
         gen_verilog_io_signals(&ir.module.params, &ir.module.returns, &mut cs);
 
         // Create states for all CFG block & a final states
@@ -640,12 +641,14 @@ pub fn compile_sched_cdfg_ir(ir: &SchedCDFGIR) ->VerilogIR {
     let name = &ir.module.name;
     let mut cs = CompilerState::init(&ir);
     gen_verilog_definitions(&ir.module, &mut cs);
+    // TODO: implement module instantiations
     VerilogIR { 
-        name: name.clone(), 
+        name: name.clone(),
         localparams: cs.localparams, 
         io_signals: cs.io,
         regs: cs.regs,
         wires: cs.wires,
+        module_instantiations: vec![],
         always: cs.always 
     }
 }
@@ -662,7 +665,7 @@ mod tests {
     use std::process::Command;
     use std::io::{self, Write};
 
-    use crate::dfg;
+    use crate::{dfg,call};
     use crate::gen_verilog;
     use crate::gen_graphviz;
 
@@ -672,8 +675,6 @@ mod tests {
     
     fn run_test(ir: &SchedCDFGIR) {
         let name = &ir.module.name;
-        let verilog = compile_sched_cdfg_ir(ir);
-        gen_verilog::generate_verilog_to_file(&verilog, &format!("./test/{}/{}.v", name, name));
 
         for (l, dfg) in &ir.module.cdfg {
             match &dfg.body {
@@ -681,6 +682,9 @@ mod tests {
                     gen_graphviz::gen_graphviz_from_dfg(dfg, &format!("./test/{}/{}.dot", name, l))
             }
         }
+
+        let verilog = compile_sched_cdfg_ir(ir);
+        gen_verilog::generate_verilog_to_file(&verilog, &format!("./test/{}/{}.v", name, name));
 
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
@@ -763,6 +767,7 @@ mod tests {
                 name: String::from("collatz"),
                 start: String::from("INIT"),
                 params: vec![Var {name: String::from("n"), type_: int(32)}],
+                ports: vec![],
                 resources: IndexMap::new(),
                 cdfg,
                 returns: vec![Var {name: String::from("step"), type_: int(32)}],
@@ -879,6 +884,7 @@ mod tests {
                 name: "collatz_ii1".to_string(),
                 start: label("INIT0"),
                 params: vec![n.clone()],
+                ports: vec![],
                 resources: IndexMap::new(),
                 cdfg,
                 returns: vec![res.clone()]
@@ -906,6 +912,7 @@ mod tests {
                 name: "sum_of_square".to_string(),
                 start: label("INIT"),
                 params: vec![n.clone()],
+                ports: vec![],
                 resources: IndexMap::new(),
                 cdfg: vec![
                     (label("INIT"), DFGBB {
@@ -961,6 +968,7 @@ mod tests {
                 name: "sum_of_square_ii1".to_string(),
                 start: label("INIT"),
                 params: vec![n.clone()],
+                ports: vec![],
                 resources: IndexMap::new(),
                 cdfg: vec![
                     (label("INIT"), DFGBB {
@@ -1019,6 +1027,7 @@ mod tests {
                 name: "sum_of_square_plus_i".to_string(),
                 start: label("INIT"),
                 params: vec![n.clone()],
+                ports: vec![],
                 resources: IndexMap::new(),
                 cdfg: vec![
                     (label("INIT"), DFGBB {
@@ -1061,25 +1070,44 @@ mod tests {
 
     // Test case with access across stages with distance > 1
     #[test]
-    fn resource_share1() {
+    fn sum_of_array() {
         let n = &var("n", int(32));
         let test0 = &var("test0", uint(1));
         let res = &var("res", int(32));
         let i = &var("i", int(32));
+        let v0 = &var("v0", int(32));
+        let v = &var("v", int(32));
+        let v_next = &var("v_next", int(32));
         // let i_copy = &var("i_copy", int(32));
         let i_next = &var("i_next", int(32));
-        let mul = &var("mul", int(32));
-        let pls = &var("pls", int(32));
         let sum = &var("sum", int(32));
         let sum_next = &var("sum_next", int(32));
         let loop_cond = &var("loop_cond", int(1));
 
         let ir = GenCDFGIR {
-            resource_types: IndexMap::new(),
+            resource_types: [
+                ("BRAM_2P".to_string(), ResourceType {
+                    methods: [
+                        ("read".to_string(), Method {
+                            inputs: vec![var("addr", int(32))],
+                            outputs: vec![var("val", int(32))],
+                            timing: Timing::Fixed(2, 1),
+                            interface_signal: [Signal::Enable].iter().cloned().collect(),
+                        }),
+                        ("write".to_string(), Method {
+                            inputs: vec![var("addr", int(32)), var("val", int(32))],
+                            outputs: vec![],
+                            timing: Timing::Fixed(1, 1),
+                            interface_signal: [Signal::Enable].iter().cloned().collect(),
+                        })
+                    ].iter().cloned().collect(),
+                })
+            ].iter().cloned().collect(),
             module: GenCDFGModule {
-                name: "sum_of_square_plus_i".to_string(),
+                name: "sum_of_array".to_string(),
                 start: label("INIT"),
                 params: vec![n.clone()],
+                ports: vec![("arr".to_string(), "BRAM_2P".to_string())],
                 resources: IndexMap::new(),
                 cdfg: vec![
                     (label("INIT"), DFGBB {
@@ -1087,20 +1115,26 @@ mod tests {
                         body: DFGBBBody::Seq(dfg!{
                             test0 <- gt(n, val(0, int(32))), 0;
                         }),
+                        exit: jc(test0, label("INIT1"), label("EXIT"))
+                    }),
+                    (label("INIT1"), DFGBB {
+                        prevs: vec![],
+                        body: DFGBBBody::Seq(dfg!{
+                            // TODO: wait for finish read
+                            v0 <- call!(arr, read, [i], []), 0;
+                            test0 <- gt(n, val(1, int(32))), 0;
+                        }),
                         exit: jc(test0, label("LOOP"), label("EXIT"))
                     }),
                     (label("LOOP"), DFGBB {
                         prevs: vec![label("INIT")],
                         body: DFGBBBody::Pipe(dfg!{
                             i <- mu(val(1, int(32)), i_next), 0;
-                            sum <- mu(val(0, int(32)), sum_next), 2;
+                            sum <- mu(val(0, int(32)), sum_next), 0;
+                            v <- mu(v0, v_next), 1;
                             i_next <- plus(i, val(1, int(32))), 0;
-                            mul <- mult(i, i), 1;
-                            // Here we should read value of i from prev-stage (i.e., stage 1.)
-                            // i_copy <- copy(i), 1;
-                            // pls <- plus(mul, i_copy), 2;
-                            pls <- plus(mul, i), 2;
-                            sum_next <- plus(sum, pls), 3;
+                            v_next <- call!(arr, read, [i], []), 0;
+                            sum_next <- plus(sum, v), 1;
                             loop_cond <- le(i_next, n), 0;
                         }, 1),
                         exit: jmp(label("EXIT"))

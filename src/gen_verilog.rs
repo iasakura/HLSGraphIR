@@ -92,6 +92,10 @@ pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
         for (var, rhs) in &ir.wires {
             genstmt!("{}", make_var_decl("wire", &var.name, var.bits, None));
         }
+        for m in &ir.module_instantiations {
+            let args_str = m.args.iter().map(|a| a.name.clone()).collect::<Vec<_>>().join(", ");
+            genstmt!("{}({});", m.name, args_str);
+        }
         for (var, rhs) in &ir.wires {
             if let Some(rhs) = rhs {
                 genstmt!("assign {} = {}", var, rhs);
@@ -139,6 +143,7 @@ fn generate_verilog_test() {
             (vvar("n", 32, None), IOType::Input),
             (vvar("ret", 32, None), IOType::OutputReg)
         ],
+        module_instantiations: vec![],
         regs: vec![
             vvar("a", 32, Some(3)), 
             vvar("b", 64, None)

@@ -91,6 +91,29 @@ pub fn copy<T: ToArg>(a: T) -> Expr {
     Expr::Copy (a.to_arg())
 }
 
+
+#[macro_export]
+macro_rules! call {
+    ($mod_name:ident, $meth_name:ident, [$( $arg:expr ),*], [$($dep:expr),*])  => {
+        crate::cdfg_ir::Expr::Call( 
+            stringify!($mod_name).to_string(),
+            stringify!($meth_name).to_string(),
+            vec![
+                $(
+                    $arg.to_arg()
+                ),*
+            ],
+            vec![
+                $(
+                    // For cloning var
+                    { let t = $dep; (t.0.clone(), t.1) }
+                ),*
+            ]
+        )
+    };
+}
+
+
 gen_op_def!{unop( neg, UnOp::Neg )}
 gen_op_def!{unop( not, UnOp::Not )}
 
@@ -328,6 +351,8 @@ pub struct GenCDFGModule<SCHED: fmt::Debug, II: fmt::Debug> {
     pub name: String,
     pub start: Label,
     pub params: Vec<Var>,
+    // External resources
+    pub ports: Vec<(String, String)>,
     pub resources: IndexMap<String, String>,
     pub cdfg: CDFG<SCHED, II>,
     pub returns: Vec<Var>
