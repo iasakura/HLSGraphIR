@@ -61,7 +61,6 @@ fn interp_binop(op: &BinOp, arg1: &Arg, arg2: &Arg, env: &Env, prev_index: i32, 
         BinOp::Or => to_int(to_bool(v1) || to_bool(v2)),
 
         BinOp::Mu => if is_first { v1 } else { v2 }
-        BinOp::Ita => if prev_index == 0 { v1 } else if prev_index == 1 { v2 } else { panic!("TODO: support prev_index more than 2.") }
     }
 }
 
@@ -81,6 +80,13 @@ fn interp_expr(expr: &Expr, env: &Env, prev_index: i32, is_first: bool) -> i32 {
         Expr::UnExp(op, a) => interp_unop(op, a, env, prev_index, is_first),
         Expr::BinExp(op, a1, a2) => interp_binop(op, a1, a2, env, prev_index, is_first),
         Expr::TerExp(op, a1, a2, a3) => interp_terop(op, a1, a2, a3, env, prev_index, is_first),
+        Expr::Ita(args) => {
+            if prev_index < args.len() as i32 {
+                interp_arg(&args[prev_index as usize], env)
+            } else {
+                panic!("prev_index is larger than #args")
+            }
+        }
     }
 }
 

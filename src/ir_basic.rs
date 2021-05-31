@@ -62,7 +62,6 @@ pub enum BinOp {
     Or,
 
     Mu,
-    Ita
 }
 
 pub fn is_bool_op(op: &BinOp) -> bool {
@@ -91,7 +90,6 @@ impl fmt::Display for BinOp {
             BinOp::Or => write!(f, "||"),
 
             BinOp::Mu => write!(f, "Mu"),
-            BinOp::Ita => write!(f, "Ita")
         }
     }
 }

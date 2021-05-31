@@ -52,7 +52,6 @@ impl fmt::Display for VExpr {
             VExprE::BinExp(op, e1, e2) => {
                 match op {
                     BinOp::Mu => panic!("Mu is not supported in VerilogIR"),
-                    BinOp::Ita => panic!("Ita is not supported in VerilogIR"),
                     _ => write!(f, "({} {} {})", e1, op, e2)
                 }
             },
@@ -143,7 +142,6 @@ gen_vop_def!{unop( vneg, UnOp::Neg )}
 gen_vop_def!{unop( vnot, UnOp::Not )}
 
 gen_vop_def!{binop( vmu, BinOp::Mu )}
-gen_vop_def!{binop( vita, BinOp::Ita )}
 gen_vop_def!{binop( vplus, BinOp::Plus )}
 gen_vop_def!{binop( vminus, BinOp::Minus )}
 gen_vop_def!{binop( vmult, BinOp::Mult )}
@@ -187,14 +185,15 @@ pub fn vassign<T1: ToVVar, T2: ToVExpr>(lhs: T1, rhs: T2) -> VAssign {
 
 #[derive(Debug, Clone, Copy)]
 pub enum IOType {
-    Input, OutputReg,
+    Input, Output, OutputReg,
 }
 
 impl fmt::Display for IOType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             IOType::Input => write!(f, "input"),
-            IOType::OutputReg => write!(f, "output reg")
+            IOType::OutputReg => write!(f, "output reg"),
+            IOType::Output => write!(f, "output")
         }
     }
 }
@@ -212,6 +211,10 @@ pub struct ModuleInstantiation {
     pub args: Vec<VVar>
 }
 
+// List of case e: var
+// Need to be pairwise mutually exclusive
+pub type ExMux = Vec<(VExpr, VExpr)>;
+
 #[derive(Debug)]
 pub struct VerilogIR {
     pub name: String,
@@ -219,6 +222,8 @@ pub struct VerilogIR {
     pub module_instantiations: Vec<ModuleInstantiation>,
     pub io_signals: Vec<(VVar, IOType)>,
     pub regs: Vec<VVar>,
-    pub wires: IndexMap<VVar, Option<VExpr>>,
+    pub wires: Vec<VVar>,
+    pub assigns: Vec<(VVar, VExpr)>,
     pub always: Vec<VAlways>,
+    pub ex_mux: IndexMap<VVar, ExMux>,
 }

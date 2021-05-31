@@ -3,7 +3,6 @@ use std::io;
 use std::rc::Rc;
 use std::cell::RefCell;
 
-use indexmap::map::IndexMap;
 use indoc::indoc;
 
 use crate::verilog_ir::*;
@@ -89,17 +88,15 @@ pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
         for v in &ir.regs {
             genstmt!("{}", make_var_decl("reg", &v.name, v.bits, v.idx));
         }
-        for (var, rhs) in &ir.wires {
+        for var in &ir.wires {
             genstmt!("{}", make_var_decl("wire", &var.name, var.bits, None));
         }
         for m in &ir.module_instantiations {
             let args_str = m.args.iter().map(|a| a.name.clone()).collect::<Vec<_>>().join(", ");
             genstmt!("{}({});", m.name, args_str);
         }
-        for (var, rhs) in &ir.wires {
-            if let Some(rhs) = rhs {
-                genstmt!("assign {} = {}", var, rhs);
-            }
+        for (var, rhs) in &ir.assigns {
+            genstmt!("assign {} = {}", var, rhs);
         }
         for a in &ir.always {
             genln!("always @(posedge {}) begin", a.clk.name);
@@ -116,6 +113,31 @@ pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
             }
             genln!("end");
         }
+        for (lhs, mux) in &ir.ex_mux {
+            // genstmt!("{}", make_var_decl("wire", &lhs.name, lhs.bits, None));
+            genln!("always_comb begin");
+            {
+                let _s = Scope::new(cur_tab.clone());
+                let case_list = mux.iter().map(|(c, _)| c.to_string()).collect::<Vec<_>>().join(", ");
+                let n = mux.len();
+                genln!("unique casez ({{ {} }})", case_list);
+                {
+                    let _s = Scope::new(cur_tab.clone());
+                    for (i, (_, rhs)) in mux.iter().enumerate() {
+                        let case_cond = (0..n).map(|j| 
+                            if i == j { "1" }
+                            else { "0" }
+                        ).collect::<Vec<_>>().join("");
+                        genstmt!("{}'b{}: {} = {}", n, case_cond, lhs.name, rhs);
+                    }
+                    let lhs_bits = lhs.bits;
+                    let undef = format!("{}'b{}", lhs_bits, "X".repeat(lhs_bits as usize));
+                    genstmt!("default: {} = {}", lhs.name, undef);
+                }
+                genln!("endcase");
+            }
+            genln!("end");
+        }
     }
     genln!("endmodule");
 }
@@ -128,6 +150,8 @@ pub fn generate_verilog_to_file(ir: &VerilogIR, filename: &str) {
 #[test]
 fn generate_verilog_test() {
     use crate::ir_basic::*;
+
+    use indexmap::map::IndexMap;
 
     let mut vec: Vec<u8> = Vec::new();
     let ir = VerilogIR {
@@ -143,15 +167,21 @@ fn generate_verilog_test() {
             (vvar("n", 32, None), IOType::Input),
             (vvar("ret", 32, None), IOType::OutputReg)
         ],
-        module_instantiations: vec![],
+        module_instantiations: vec![], // TODO: Add sample case
         regs: vec![
             vvar("a", 32, Some(3)), 
             vvar("b", 64, None)
         ],
         wires: vec![
-            (vvar("c", 32, None), Some(vplus(vvar("a", 32, Some(0)), val(1, int(32))))
-            )
-        ].into_iter().collect::<IndexMap<_, _>>(),
+            vvar("c", 32, None),
+            vvar("d", 32, None),
+            vvar("e", 32, None),
+        ],
+        assigns: vec![
+            (vvar("c", 32, None), vplus(vvar("a", 32, Some(0)), val(1, int(32)))),
+            (vvar("d", 32, None), val(42, int(32)).to_vexpr()),
+            (vvar("e", 32, None), val(-1, int(32)).to_vexpr()),
+        ],
         always: vec![
             VAlways {
                 clk: vvar("clk", 1, None),
@@ -160,7 +190,13 @@ fn generate_verilog_test() {
                     vassign(vvar("a", 32, Some(0)), vvar("c", 32, None).to_vexpr()),
                 ]
             },
-        ]
+        ],
+        ex_mux: vec![
+            (vvar("ex_mux_test1", 32, None), vec![
+                (vlt(vvar("a", 32, Some(0)), vvar("b", 32, None)), vvar("d", 32, None).to_vexpr()),
+                (vge(vvar("a", 32, Some(0)), vvar("b", 32, None)), vvar("e", 32, None).to_vexpr()),
+            ]),
+        ].into_iter().collect::<IndexMap<_, _>>(),
     };
     generate_verilog_to_stream(&ir, &mut vec);
     let s = vec.iter().map(|&u| u as char).collect::<String>();

@@ -6,59 +6,41 @@ use std::cmp;
 // use std::rc::Rc;
 use std::iter;
 
-use indexmap::map::IndexMap;
+use indexmap::map::{IndexMap, Entry};
 use log::{debug, error, log_enabled, info, Level};
 
 const FINISH_STATE : &'static str = "__FINISH";
-
-fn gen_verilog_io_signals(ir_params: &Vec<Var>, ir_returns: &Vec<Var>, cs: &mut CompilerState) {
-    let start = "start";
-    let finish = "finish";
-    let ctrl_sigs = vec![
-        ("clk", IOType::Input), 
-        ("rst_n", IOType::Input), 
-        (start, IOType::Input),
-        (finish, IOType::OutputReg)
-    ];
-    let var_list_of_ctrls = ctrl_sigs.iter().map(|(var, type_)| {
-        (vvar(*var, 1, None), *type_)
-    });
-    let var_list_of_params = ir_params.iter().map(|var| {
-        (vvar(&var.name, var.type_.bits, None), IOType::Input)
-    });
-    let var_list_of_returns = ir_returns.iter().map(|var| {
-        (vvar(&var.name, var.type_.bits, None), IOType::OutputReg)
-    });
-    cs.io = var_list_of_ctrls.chain(var_list_of_params).chain(var_list_of_returns).collect::<Vec<_>>();
-    cs.start = vvar(start, 1, None);
-    cs.finish = vvar(finish, 1, None);
-}
 
 // struct ModuleInstantiation {
 //     name: String,
 //     args: Vec<VVar>,
 // }
 
-type ExMux = Vec<(VExpr, VVar)>;
-
+#[derive(Clone)]
 struct MethodInterface {
     args: Vec<VVar>,
-    ret: Vec<VVar>,
+    rets: Vec<VVar>,
 
     en: Option<VVar>,
     done: Option<VVar>,
     cont: Option<VVar>,
+
+    timing: Timing,
 }
 
 struct ResourceInterface {
-    methods: IndexMap<String, MethodInterface>
+    clk: Option<VVar>,
+    reset_n: Option<VVar>,
+
+    methods: IndexMap<String, MethodInterface>,
 }
 
 struct CompilerState {
     io: Vec<(VVar, IOType)>,
     localparams: Vec<(VVar, i32)>,
     regs: Vec<VVar>,
-    wires : IndexMap<VVar, Option<VExpr>>,
+    wires : Vec<VVar>,
+    assigns: Vec<(VVar, VExpr)>,
     // Exclusive multiplexer
     ex_mux: IndexMap<VVar, ExMux>,
     always: Vec<VAlways>,
@@ -74,7 +56,9 @@ struct CompilerState {
     states: IndexMap<Label, VExpr>,
 
     resource_types: IndexMap<String, ResourceType>,
-    resources: IndexMap<String, ResourceInterface>,
+    resource_signal_map: IndexMap<String, ResourceInterface>,
+
+    fresh_name_counter: u32,
 
     // module_instantiations: Vec<ModuleInstantiation>,
 }
@@ -92,39 +76,106 @@ fn bits_of_states(n: u32) -> u32 {
     cmp::max(res, 1)
 }
 
-fn create_resource(resources: &IndexMap<String, String>, ports: &Vec<(String, String)>, resource_types: &IndexMap<String, ResourceType>, cs: &mut CompilerState) -> IndexMap<String, ResourceInterface> {
+fn create_resource_map(resources: &IndexMap<String, String>, ports: &Vec<(String, String)>, resource_types: &IndexMap<String, ResourceType>, cs: &mut CompilerState) -> IndexMap<String, ResourceInterface> {
     // For each resources (resource_name, resource_type_name)
-    let all_resources = resources.iter().chain(ports.iter().map(|tup| (&tup.0, &tup.1)));
-    all_resources.map(|(res_name, type_name)| {
+    // the second bool element means the resource is internal
+    let all_resources = 
+        resources.iter().map(|v| (v, true)).chain(ports.iter().map(|tup| ((&tup.0, &tup.1), false)));
+
+    all_resources.map(|((res_name, type_name), is_internal)| {
         let res_type = resource_types.get(type_name).unwrap();
         // For each methods in the resource
         let methods = res_type.methods.iter().map( |(meth_name, method)| {
             let prefix = format!("{}_{}", res_name, meth_name);
             let args = method.inputs.iter().map( |arg_name| 
-                cs.new_wire(&format!("{}_{}_arg", prefix, arg_name.name), arg_name.type_.bits, None)
+                if is_internal {
+                    cs.new_wire(&format!("{}_{}_arg", prefix, arg_name.name), arg_name.type_.bits, None)
+                } else {
+                    vvar(&format!("{}_{}_arg", prefix, arg_name.name), arg_name.type_.bits, None)
+                }
             ).collect::<Vec<_>>();
-            let ret = method.outputs.iter().map( |out_name| 
-                cs.new_wire(&format!("{}_{}_ret", prefix, out_name.name), out_name.type_.bits, None)
+            let rets = method.outputs.iter().map( |out_name|
+                if is_internal {
+                    cs.new_wire(&format!("{}_{}_ret", prefix, out_name.name), out_name.type_.bits, None)
+                } else {
+                    vvar(&format!("{}_{}_ret", prefix, out_name.name), out_name.type_.bits, None)
+                }
             ).collect::<Vec<_>>();
-            let en = if method.interface_signal.contains(&Signal::Enable) {
-                Some (cs.new_wire(&format!("{}_en", &prefix), 1, None))
-            } else {
-                None
-            };
-            let done = if method.interface_signal.contains(&Signal::Enable) {
-                Some (cs.new_wire(&format!("{}_done", &prefix), 1, None))
-            } else {
-                None
-            };
-            let cont = if method.interface_signal.contains(&Signal::Enable) {
-                Some (cs.new_wire(&format!("{}_cont", &prefix), 1, None))
-            } else {
-                None
-            };
-            (meth_name.clone(), MethodInterface {args, ret, en, done, cont})
+            let signals = [Signal::Enable, Signal::Done, Signal::Continue].iter();
+            let signal_map = signals.map(|sig| {
+                let wire = if method.interface_signal.contains(sig) {
+                    if is_internal {
+                        Some (cs.new_wire(&format!("{}_{}", &prefix, sig.signal_name_suffix()), 1, None))
+                    } else {
+                        Some (vvar(&format!("{}_{}", &prefix, sig.signal_name_suffix()), 1, None))
+                    }
+                } else {
+                    None
+                };
+                (sig, wire)
+            }).collect::<IndexMap<_, _>>();
+            let get_wire = |sig| { signal_map.get(sig).unwrap().clone() };
+            (meth_name.clone(), MethodInterface {args, rets, 
+                en: get_wire(&Signal::Enable), 
+                done: get_wire(&Signal::Done), 
+                cont: get_wire(&Signal::Continue),
+                timing: method.timing.clone(),
+            })
         }).collect::<IndexMap<_, _>>();
-        (res_name.clone(), ResourceInterface {methods})
+        
+        // TODO: Implement clk & reset specification
+        let mod_clk = vvar(format!("{}_clk", &res_name), 1, None);
+        cs.assign(&mod_clk, vvar("clk", 1, None).to_vexpr());
+        (res_name.clone(), ResourceInterface {
+            clk: Some (vvar(format!("{}_clk", &res_name), 1, None)),
+            reset_n: None,
+            methods,
+        })
     }).collect::<IndexMap<_, _>>()
+}
+
+fn gen_verilog_io_signals(ir_params: &Vec<Var>, ir_returns: &Vec<Var>, ir_resource: &Vec<(String, String)>, resource_type: &IndexMap<String, ResourceType>, cs: &mut CompilerState) {
+    let start = "start";
+    let finish = "finish";
+    let ctrl_sigs = vec![
+        ("clk", IOType::Input), 
+        ("rst_n", IOType::Input), 
+        (start, IOType::Input),
+        (finish, IOType::OutputReg)
+    ];
+
+    let var_list_of_ctrls = ctrl_sigs.iter().map(|(var, type_)| {
+        (vvar(*var, 1, None), *type_)
+    });
+
+    let var_list_of_params = ir_params.iter().map(|var| {
+        (vvar(&var.name, var.type_.bits, None), IOType::Input)
+    });
+
+    let var_list_of_returns = ir_returns.iter().map(|var| {
+        (vvar(&var.name, var.type_.bits, None), IOType::OutputReg)
+    });
+
+    let port_signals = ir_resource.iter().flat_map(|(res_name, res_type_name)| {
+        let port = cs.resource_signal_map.get(res_name).expect(&format!("Resource {} is not found", res_name));
+        let clk = port.clk.iter().map(|clk| (clk.clone(), IOType::Output));
+        let reset_n = port.reset_n.iter().map(|reset_n| (reset_n.clone(), IOType::Output));
+        let meth_sigs = port.methods.iter().flat_map(|(meth_name, meth)| {
+            let ctrl_signals = vec![
+                (meth.en.clone(), IOType::Output), 
+                (meth.done.clone(), IOType::Input),
+                (meth.cont.clone(), IOType::Input)
+            ].into_iter().flat_map(|(var, io_type)| var.into_iter().map(move |v| (v, io_type) ));
+            let args = meth.args.iter().map(|arg| (arg.clone(), IOType::Output));
+            let rets = meth.rets.iter().map(|ret| (ret.clone(), IOType::Input));
+            ctrl_signals.chain(args).chain(rets)
+        });
+        clk.into_iter().chain(reset_n.into_iter()).chain(meth_sigs)
+    });
+
+    cs.io = var_list_of_ctrls.chain(var_list_of_params).chain(var_list_of_returns).chain(port_signals).collect::<Vec<_>>();
+    cs.start = vvar(start, 1, None);
+    cs.finish = vvar(finish, 1, None);
 }
 
 impl CompilerState {
@@ -133,7 +184,7 @@ impl CompilerState {
         // Don't forget to update dummy variables.
         let mut cs = CompilerState { 
             io: vec![],
-            localparams: vec![], regs: vec![], wires: IndexMap::new(), always: vec![], ex_mux: IndexMap::new(),
+            localparams: vec![], regs: vec![], wires: vec![], assigns: vec![], always: vec![], ex_mux: IndexMap::new(),
             cur_state: vvar("dummy", 0, None),
             prev_state: vvar("dummy", 0, None),
             start: vvar("dummy", 0, None),
@@ -141,10 +192,12 @@ impl CompilerState {
             ens: IndexMap::new(), dones: IndexMap::new(), states: IndexMap::new(),
 
             resource_types: ir.resource_types.clone(),
-            resources: IndexMap::new(),
+            resource_signal_map: IndexMap::new(),
+
+            fresh_name_counter: 0
         };
-        cs.resources = create_resource(&ir.module.resources, &ir.module.ports, &ir.resource_types, &mut cs);
-        gen_verilog_io_signals(&ir.module.params, &ir.module.returns, &mut cs);
+        cs.resource_signal_map = create_resource_map(&ir.module.resources, &ir.module.ports, &ir.resource_types, &mut cs);
+        gen_verilog_io_signals(&ir.module.params, &ir.module.returns, &ir.module.ports, &ir.resource_types, &mut cs);
 
         // Create states for all CFG block & a final states
         let finish_state = FINISH_STATE.to_string();
@@ -200,33 +253,42 @@ impl CompilerState {
 
     fn new_wire(&mut self, name: &str, bits: u32, idx: Option<u32>) -> VVar {
         let v = vvar(name, bits, idx);
-        self.wires.insert(v.clone(), None);
+        self.wires.push(v.clone());
         v
     }
 
     fn assign(&mut self, v: &VVar, expr: VExpr) {
-        *self.wires.get_mut(v).expect(&format!("Variable {} is not found.", v)) = Some(expr);
+        self.assigns.push((v.clone(), expr.clone()));
     }
 
     fn new_assign(&mut self, name: &str, bits: u32, idx: Option<u32>, expr: VExpr) -> VVar {
-        let v = vvar(name, bits, idx);
-        self.wires.insert(v.clone(), Some(expr));
+        let v = self.new_wire(name, bits, idx);
+        self.assign(&v, expr);
         v
     }
 
     fn new_ex_mux(&mut self, name: &str, bits: u32, idx: Option<u32>) -> VVar {
-        let v = vvar(name, bits, idx);
+        let v = self.new_wire(name, bits, idx);
         self.ex_mux.insert(v.clone(), vec![]);
         v
     }
 
-    fn add_case_to_ex_mut(&mut self, vvar: &VVar, cond: &VExpr, var: &VVar) {
-        self.ex_mux.get_mut(vvar).expect(&format!("Var {} is not found", vvar.name)).push((cond.clone(), var.clone()));
+    fn add_case_to_ex_mut(&mut self, vvar: &VVar, cond: &VExpr, expr: &VExpr) {
+        let mut entry = self.ex_mux.entry(vvar.clone());
+        let cases = match entry {
+            Entry::Occupied(ref mut o) => o.get_mut(),
+            Entry::Vacant(v) => v.insert(vec![])
+        };
+        cases.push((cond.clone(), expr.clone()));
     }
 
     fn add_event(&mut self, cond: VExpr, assigns: Vec<VAssign>) {
         let clk = vvar("clk", 1, None);
         self.always.push(VAlways {clk, cond, assigns})
+    }
+
+    fn fresh_name(&mut self) -> String {
+        format!("__tmp_{}", self.fresh_name_counter)
     }
 }
 
@@ -265,7 +327,19 @@ fn ir_arg_to_vexpr(a: &Arg) -> VExpr {
     }
 }
 
-fn ir_expr_to_vexpr(e: &Expr, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &CompilerState) -> VExpr {
+fn type_of_arg(arg: &Arg) -> Type {
+    match arg {
+        Arg::Var(Var {type_, ..}) => type_.clone(),
+        Arg::Val(Val {type_, ..}) => type_.clone(),
+    }
+}
+
+// TODO: implement
+// fn type_of_expr(expr: Expr) -> Type {
+// }
+
+// returns vexpr and a vec of VAssign's which need to be executed for correctly evaluating vexpr (like enable signals)
+fn ir_expr_to_vexpr(e: &Expr, is_first: Option<&VVar>, prevs: &Vec<Label>, cond: &VExpr, cs: &mut CompilerState) -> VExpr {
     match e {
         Expr::UnExp(op, a) => unexp(*op, ir_arg_to_vexpr(a)),
         Expr::BinExp(op, a1, a2) => {
@@ -278,29 +352,50 @@ fn ir_expr_to_vexpr(e: &Expr, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &
                     }
                     
                 }
-                BinOp::Ita => {
-                    if prevs.len() != 2 {
-                        panic!("The number of prev node must be 2 for using Ita.\n");
-                    }
-                    let t_label = &prevs[0];
-                    let t_label_value = get(&cs.states, &t_label);
-                    vselect(
-                        veq(&cs.prev_state, t_label_value),
-                        ir_arg_to_vexpr(a1),
-                        ir_arg_to_vexpr(a2)
-                    )
-                }
                 _ => binexp(*op, ir_arg_to_vexpr(a1), ir_arg_to_vexpr(a2)),
             }
         },
         Expr::TerExp(op, a1, a2, a3) => terexp(*op, ir_arg_to_vexpr(a1), ir_arg_to_vexpr(a2), ir_arg_to_vexpr(a3)),
         Expr::Copy(Arg::Val(n)) => n.to_vexpr(),
         Expr::Copy(Arg::Var(v)) => var_to_vvar(v).to_vexpr(),
-        Expr::Call(module, meth, args, deps) => {
-            let method = cs.resources.get(module).expect(&format!("Module {} is not found", module)).methods
-                .get(meth).expect(&format!("Method {} in Module {} is not found", meth, module));
-            (&method.ret[0]).to_vexpr()
+        Expr::Call(module, meth, args, _deps) => {
+            let method = {
+                // TODO: clone required because it takes immutable borrow of cs while cs used as mutable later.
+                let method = cs.resource_signal_map.get(module).expect(&format!("Module {} is not found", module))
+                .methods.get(meth).expect(&format!("Method {} in Module {} is not found", meth, module));
+                method.clone()
+            };
+
+            // Generate arguments signals
+            for (a_intf, a) in method.args.iter().zip(args) {
+                cs.add_case_to_ex_mut(a_intf, cond, &ir_arg_to_vexpr(&a));
+            }
+
+            // Generate enable
+            if let Some(en) = &method.en {
+                cs.add_event(cond.clone(), vec![vassign(en, TRUE)]);
+            }
+
+            (&method.rets[0]).to_vexpr()
+        },
+        Expr::Ita(args) => {
+            if prevs.len() != args.len() {
+                panic!("The number of prev node must be 2 for using Ita.\n");
+            }
+            let t_label = &prevs[0];
+            let t_label_value = get(&cs.states, &t_label);
+
+            let name = cs.fresh_name();
+            let type_ = type_of_arg(&args[0]);
+            let vvar = cs.new_ex_mux(&name, type_.bits, None);
+
+            for (arg, prev) in args.iter().zip(prevs.iter()) {
+                cs.add_case_to_ex_mut(&vvar, &veq(&cs.prev_state, get(&cs.states, prev)), &ir_arg_to_vexpr(arg))
+            }
+
+            vvar.to_vexpr()
         }
+
     }
 }
 
@@ -322,21 +417,25 @@ fn rename_with_sched(a: &Arg, i: u32, deps: &IndexMap<Var, DepType>, dfg: &Index
     }
 }
 
-fn ir_expr_to_vexpr_with_sched(e: &Expr, i: u32, is_first: Option<&VVar>, prevs: &Vec<Label>, cs: &mut CompilerState, dfg: &IndexMap<Var, DFGNode<Sched>>, ii: u32) -> VExpr {
+fn ir_expr_to_vexpr_with_sched(e: &Expr, i: u32, is_first: Option<&VVar>, prevs: &Vec<Label>, cond: &VExpr, cs: &mut CompilerState, dfg: &IndexMap<Var, DFGNode<Sched>>, ii: u32) -> VExpr {
     let deps = get_deps_of_expr(e, dfg).into_iter().collect::<IndexMap<Var, _>>();
     match e {
-        Expr::Call(_, _, _, _) => panic!("TODO: implement"),
+        Expr::Call(res, meth, args, extra_deps) => {
+            ir_expr_to_vexpr(&Expr::Call(res.clone(), meth.clone(), args.iter().map(|a| rename_with_sched(a, i, &deps, dfg, ii)).collect(), extra_deps.clone()), is_first, prevs, cond, cs)
+        },
         Expr::Copy(a) =>
-            ir_expr_to_vexpr(&Expr::Copy(rename_with_sched(a, i, &deps, dfg, ii)), is_first, prevs, cs),
+            ir_expr_to_vexpr(&Expr::Copy(rename_with_sched(a, i, &deps, dfg, ii)), is_first, prevs, cond,cs),
         Expr::UnExp(op, a) =>
-            ir_expr_to_vexpr(&Expr::UnExp(*op, rename_with_sched(a, i, &deps, dfg, ii)), is_first, prevs, cs),
+            ir_expr_to_vexpr(&Expr::UnExp(*op, rename_with_sched(a, i, &deps, dfg, ii)), is_first, prevs, cond, cs),
         // Because second argument of Mu is loop carried dependency, the arg must be read from register.
         Expr::BinExp(BinOp::Mu, a1, a2) =>
-            ir_expr_to_vexpr(&Expr::BinExp(BinOp::Mu, rename_with_sched(a1, i, &deps, dfg, ii), rename_with_sched(a2, i, &deps, dfg, ii)), is_first, prevs, cs),
+            ir_expr_to_vexpr(&Expr::BinExp(BinOp::Mu, rename_with_sched(a1, i, &deps, dfg, ii), rename_with_sched(a2, i, &deps, dfg, ii)), is_first, prevs, cond, cs),
         Expr::BinExp(op, a1, a2) =>
-            ir_expr_to_vexpr(&Expr::BinExp(*op, rename_with_sched(a1, i, &deps, dfg, ii), rename_with_sched(a2, i, &deps, dfg, ii)), is_first, prevs, cs),
+            ir_expr_to_vexpr(&Expr::BinExp(*op, rename_with_sched(a1, i, &deps, dfg, ii), rename_with_sched(a2, i, &deps, dfg, ii)), is_first, prevs, cond, cs),
         Expr::TerExp(op, a1, a2, a3) =>
-            ir_expr_to_vexpr(&Expr::TerExp(*op, rename_with_sched(a1, i, &deps, dfg, ii), rename_with_sched(a2, i, &deps, dfg, ii), rename_with_sched(a3, i, &deps, dfg, ii)), is_first, prevs, cs),
+            ir_expr_to_vexpr(&Expr::TerExp(*op, rename_with_sched(a1, i, &deps, dfg, ii), rename_with_sched(a2, i, &deps, dfg, ii), rename_with_sched(a3, i, &deps, dfg, ii)), is_first, prevs, cond, cs),
+        Expr::Ita(args) =>
+            ir_expr_to_vexpr(&Expr::Ita(args.iter().map(|arg| rename_with_sched(arg, i, &deps, dfg, ii)).collect()), is_first, prevs, cond, cs)
     }
 }
 
@@ -439,6 +538,38 @@ fn max_sched_time(dfg: &DFG<Sched>) -> u32 {
     dfg.iter().map(|(_, node)| { node.sched.sched }).max().expect("Error: No nodes.\n")
 }
 
+// None means it is variable latency
+fn get_latency(timing: &Timing) -> Option<u32> {
+    match timing {
+        Timing::Combinatorial => Some(0),
+        Timing::Fixed(l, _) => Some(*l),
+        Timing::Variable => None,
+    }
+}
+
+fn get_latency_of_stmt(stmt: &Stmt, cs: &CompilerState) -> Option<u32> {
+    match &stmt.expr {
+        Expr::Call(res_name, meth_name, _args, _deps) => {
+            let res_interface = cs.resource_signal_map.get(res_name).expect(&format!("{} is not a valid resource name", res_name));
+            let meth = res_interface.methods.get(meth_name).expect(&format!("{} is not a valid method name of {}", meth_name, res_name));
+            get_latency(&meth.timing)
+        }
+        _ => Some(0),
+    }
+}
+
+fn max_lat_time(dfg: &DFG<Sched>, cs: &CompilerState) -> Option<u32> {
+    dfg.iter().fold(Some(0), |acc, (_, node)| {
+        match acc {
+            None => None,
+            Some (acc) => match get_latency_of_stmt(&node.stmt, cs).map(|x| {x + node.sched.sched}) {
+                None => None,
+                Some (lat) => Some (cmp::max(acc, node.sched.sched + lat))
+            }
+        }
+    })
+}
+
 // fn compile_stmt_to_vassign(stmt: &Stmt, prevs: &Vec<Label>, cs: &CompilerState) -> VAssign {
 //     let vvar = ir_var_to_vvar(&stmt.var);
 //     let vexpr = ir_expr_to_vexpr(&stmt.expr, None, prevs, cs);
@@ -454,13 +585,13 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
     let not_reset = (&rst_n).to_vexpr();
 
     let min_time = min_sched_time(dfg);
-    let max_time = max_sched_time(dfg);
+    let max_time = max_lat_time(dfg, cs).expect(&format!("TODO: Support variable latency"));
     let n_states = max_time - min_time + 1;
     debug!("Generating time between {}..{}", min_time, max_time);
 
     let nbits = bits_of_states(n_states);
     let cnt = cs.new_reg(&format!("{}_cnt", l), nbits, None);
-    let mut conds = vec![not_reset, en.to_vexpr()];
+    let conds = vec![not_reset, en.to_vexpr()];
     let type_ = &Type {bits: nbits, signed: false};
 
     let init_action = vassign(&cnt, val(min_time as i32, type_.clone()));
@@ -469,22 +600,37 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
 
     cs.add_event(all_true(&conds), vec![vassign(&cnt, vplus(&cnt, val(1, uint(nbits))))]);
 
-    for i in min_time..=max_time {
+    let cnt_eq_n = |n: u32| {
+        veq(&cnt, val(n as i32, type_.clone()))
+    };
 
-        conds.push(veq(&cnt, val(i as i32, type_.clone())));
-        let mut actions = sched_stmts.get(&i).unwrap().iter().map(|stmt| {
-            // TODO: is it correct to set II = 0?
-            let rhs = ir_expr_to_vexpr_with_sched(&stmt.expr, i, None, prevs, cs, dfg, 0);
+    for i in min_time..=max_time {
+        let empty_vec = vec![];
+
+        for stmt in sched_stmts.get(&i).unwrap_or_else(|| &empty_vec) {
+            let lat = get_latency_of_stmt(stmt, &cs).expect("TODO: support variable latency");
+
+            let mut new_conds = conds.clone();
+            new_conds.push(cnt_eq_n(i));
+            let call_cond = all_true(&new_conds);
+            
+            let rhs = ir_expr_to_vexpr_with_sched(&stmt.expr, i, None, prevs, &call_cond, cs, dfg, 0);
             let var = ir_var_to_vvar(&stmt.var);
             let wire = cs.new_assign(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
-            vassign(var, wire)
-        }).collect::<Vec<_>>();
+            
+            let mut new_conds = conds.clone();
+            new_conds.push(cnt_eq_n(i + lat));
+            let arrival_cond = all_true(&new_conds);
+
+            cs.add_event(arrival_cond, vec![vassign(var, wire)])
+        }
+
         // Finalizations
         if i == max_time {
-            actions.push(vassign(&done, TRUE));
+            let mut new_conds = conds.clone();
+            new_conds.push(cnt_eq_n(i));
+            cs.add_event(all_true(&new_conds), vec![vassign(&done, TRUE)]);
         }
-        cs.add_event(all_true(&conds), actions);
-        conds.pop();
     }
 
     vec![init_action]
@@ -510,7 +656,7 @@ fn varr_at<T: ToVVar>(arr: T, idx: u32) -> VVar {
 // Create pipe machine, and returns its initialization actions.
 fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: u32, cs: &mut CompilerState) -> Vec<VAssign> {
     let min_stage = min_sched_time(dfg);
-    let max_stage = max_sched_time(dfg);
+    let max_stage = max_lat_time(dfg, cs).expect(&format!("TODO: Support variable latency"));
     assert!(min_stage == 0);
     let ii_nbits = bits_of_states(ii + 1);
 
@@ -535,31 +681,42 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: u32, cs
     // stage, cond_wire (no delay), cond_reg (1cycle delay & remains false one cond_wire becomes false)
     let mut loop_conds: Option<(u32, VVar, VVar)> = None;
     // Generate datapath
-    for (i, ss) in sched_stmts {
-        conds.push(varr_at(&stage_en, i).to_vexpr());
-        let mut actions = vec![];
-        for s in ss {
-            let var = ir_var_to_vvar(&s.var);
-            if is_loop_cond(s) {
-                let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&varr_at(&stage_is_first, i)), prevs, cs, dfg, ii);
-                let wire = cs.new_assign(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
-                let loop_cond_reg = cs.new_reg(&format!("{}_loop_cond", l), 1, None);
-                inits.push(vassign(&loop_cond_reg, TRUE));
-                actions.push(vassign(&loop_cond_reg, vand(&loop_cond_reg, &wire)));
-                loop_conds = Some((i, wire.clone(), loop_cond_reg.clone()));
+    for i in min_stage..=max_stage {
+        let empty_vec = vec![];
+
+        for stmt in sched_stmts.get(&i).unwrap_or_else(|| &empty_vec) {
+            let lat = get_latency_of_stmt(stmt, &cs).expect("TODO: support variable latency");
+
+            let mut new_conds = conds.clone();
+            new_conds.push(varr_at(&stage_en, i).to_vexpr());
+            let call_cond = all_true(&new_conds);
+
+            let rhs = ir_expr_to_vexpr_with_sched(&stmt.expr, i, Some(&varr_at(&stage_is_first, i)), prevs, &call_cond, cs, dfg, ii);
+            let wire = cs.new_assign(&format!("{}_wire", stmt.var.name), stmt.var.type_.bits, None, rhs);
+            
+            let var = if is_loop_cond(stmt) {
+                cs.new_reg(&format!("{}_loop_cond", l), 1, None)
             } else {
-                let rhs = ir_expr_to_vexpr_with_sched(&s.expr, i, Some(&varr_at(&stage_is_first, i)), prevs, cs, dfg, ii);
-                let wire = cs.new_assign(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
-                actions.push(vassign(var, wire));
+                ir_var_to_vvar(&stmt.var)
+            };
+
+            if is_loop_cond(stmt) {
+                inits.push(vassign(&var, TRUE));
+                loop_conds = Some((i, wire.clone(), var.clone()));
             }
+
+            let mut new_conds = conds.clone();
+            new_conds.push(varr_at(&stage_en, i + lat).to_vexpr());
+            let arrival_cond = all_true(&new_conds);
+
+            cs.add_event(arrival_cond, vec![vassign(var, wire)])
         }
-        cs.add_event(all_true(&conds), actions);
-        conds.pop();
     }
 
     let loop_cond = match &loop_conds {
         None => TRUE.to_vexpr(),
         Some ((i, loop_cond_wire, loop_cond_reg)) => {
+            // (!stage_en[i] || loop_cond_wire) && loop_cond_reg
             vand(vor(vnot(varr_at(&stage_en, *i)), loop_cond_wire), loop_cond_reg)
         }
     };
@@ -648,8 +805,10 @@ pub fn compile_sched_cdfg_ir(ir: &SchedCDFGIR) ->VerilogIR {
         io_signals: cs.io,
         regs: cs.regs,
         wires: cs.wires,
+        assigns: cs.assigns,
         module_instantiations: vec![],
-        always: cs.always 
+        always: cs.always,
+        ex_mux: cs.ex_mux,
     }
 }
 
@@ -673,7 +832,7 @@ mod tests {
         String::from(v)
     }
     
-    fn run_test(ir: &SchedCDFGIR) {
+    fn run_test(ir: &SchedCDFGIR, top: bool ) {
         let name = &ir.module.name;
 
         for (l, dfg) in &ir.module.cdfg {
@@ -688,9 +847,10 @@ mod tests {
 
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
+        let top_name = if top { "top" } else { name };
         let output = Command::new("sh")
             .arg("-c")
-            .arg(format!("cd {}/test/{} &&  verilator --trace --trace-params --trace-structs --trace-underscore -cc {}.v -exe sim.cc && make -C obj_dir -f V{}.mk && ./obj_dir/V{}", root.display(), name, name, name, name))
+            .arg(format!("cd {}/test/{} && verilator --trace --trace-params --trace-structs --trace-underscore -cc {}.v -exe sim.cc && make -C obj_dir -f V{}.mk && ./obj_dir/V{}", root.display(), name, top_name, top_name, top_name))
             .output()
             .expect("failed to execute process");
 
@@ -753,7 +913,7 @@ mod tests {
         let exit = (s("EXIT"), DFGBB {
             prevs: vec![s("INIT"), s("LOOP")],
             body: DFGBBBody::Seq(dfg!{
-                step <- ita(step0, step2), 0;
+                step <- ita2(step0, step2), 0;
             }),
             exit: ExitOp::RET,
         });
@@ -774,7 +934,7 @@ mod tests {
             }
         };
 
-        run_test(&ir);
+        run_test(&ir, false);
     }
 
     #[test]
@@ -872,7 +1032,7 @@ mod tests {
             (s("EXIT"), DFGBB {
                 prevs: vec![label("INIT0"), label("LOOP")],
                 body: DFGBBBody::Seq(dfg!{
-                    res <- ita(init_step0, step), 0;
+                    res <- ita2(init_step0, step), 0;
                 }),
                 exit: ret()
             })
@@ -891,7 +1051,7 @@ mod tests {
             }
         };
 
-        run_test(&ir);
+        run_test(&ir, false);
     }
 
     #[test]
@@ -937,7 +1097,7 @@ mod tests {
                     (label("EXIT"), DFGBB {
                         prevs: vec![label("INIT"), label("LOOP")],
                         body: DFGBBBody::Seq(dfg!{
-                            res <- ita(val(0, int(32)), sum_next), 0;
+                            res <- ita2(val(0, int(32)), sum_next), 0;
                         }),
                         exit: ret()
                     })
@@ -946,7 +1106,7 @@ mod tests {
             }
         };
 
-        run_test(&ir);
+        run_test(&ir, false);
     }
 
     #[test]
@@ -994,7 +1154,7 @@ mod tests {
                     (label("EXIT"), DFGBB {
                         prevs: vec![label("INIT"), label("LOOP")],
                         body: DFGBBBody::Seq(dfg!{
-                            res <- ita(val(0, int(32)), sum_next), 0;
+                            res <- ita2(val(0, int(32)), sum_next), 0;
                         }),
                         exit: ret()
                     })
@@ -1003,7 +1163,7 @@ mod tests {
             }
         };
 
-        run_test(&ir);
+        run_test(&ir, false);
     }
 
     // Test case with access across stages with distance > 1
@@ -1013,7 +1173,7 @@ mod tests {
         let test0 = &var("test0", uint(1));
         let res = &var("res", int(32));
         let i = &var("i", int(32));
-        // let i_copy = &var("i_copy", int(32));
+        let i_copy = &var("i_copy", int(32));
         let i_next = &var("i_next", int(32));
         let mul = &var("mul", int(32));
         let pls = &var("pls", int(32));
@@ -1045,9 +1205,9 @@ mod tests {
                             i_next <- plus(i, val(1, int(32))), 0;
                             mul <- mult(i, i), 1;
                             // Here we should read value of i from prev-stage (i.e., stage 1.)
-                            // i_copy <- copy(i), 1;
-                            // pls <- plus(mul, i_copy), 2;
-                            pls <- plus(mul, i), 2;
+                            i_copy <- copy(i), 1;
+                            pls <- plus(mul, i_copy), 2;
+                            // pls <- plus(mul, i), 2;
                             sum_next <- plus(sum, pls), 3;
                             loop_cond <- le(i_next, n), 0;
                         }, 1),
@@ -1056,7 +1216,7 @@ mod tests {
                     (label("EXIT"), DFGBB {
                         prevs: vec![label("INIT"), label("LOOP")],
                         body: DFGBBBody::Seq(dfg!{
-                            res <- ita(val(0, int(32)), sum_next), 0;
+                            res <- ita2(val(0, int(32)), sum_next), 0;
                         }),
                         exit: ret()
                     })
@@ -1065,21 +1225,22 @@ mod tests {
             }
         };
 
-        run_test(&ir);
+        run_test(&ir, false);
     }
 
     // Test case with access across stages with distance > 1
     #[test]
     fn sum_of_array() {
-        let n = &var("n", int(32));
+        let n = &var("n", int(10));
         let test0 = &var("test0", uint(1));
+        let test1 = &var("test1", uint(1));
         let res = &var("res", int(32));
-        let i = &var("i", int(32));
+        let i = &var("i", int(10));
         let v0 = &var("v0", int(32));
         let v = &var("v", int(32));
         let v_next = &var("v_next", int(32));
         // let i_copy = &var("i_copy", int(32));
-        let i_next = &var("i_next", int(32));
+        let i_next = &var("i_next", int(10));
         let sum = &var("sum", int(32));
         let sum_next = &var("sum_next", int(32));
         let loop_cond = &var("loop_cond", int(1));
@@ -1089,13 +1250,13 @@ mod tests {
                 ("BRAM_2P".to_string(), ResourceType {
                     methods: [
                         ("read".to_string(), Method {
-                            inputs: vec![var("addr", int(32))],
+                            inputs: vec![var("addr", int(10))],
                             outputs: vec![var("val", int(32))],
                             timing: Timing::Fixed(2, 1),
                             interface_signal: [Signal::Enable].iter().cloned().collect(),
                         }),
                         ("write".to_string(), Method {
-                            inputs: vec![var("addr", int(32)), var("val", int(32))],
+                            inputs: vec![var("addr", int(10)), var("val", int(32))],
                             outputs: vec![],
                             timing: Timing::Fixed(1, 1),
                             interface_signal: [Signal::Enable].iter().cloned().collect(),
@@ -1113,7 +1274,7 @@ mod tests {
                     (label("INIT"), DFGBB {
                         prevs: vec![],
                         body: DFGBBBody::Seq(dfg!{
-                            test0 <- gt(n, val(0, int(32))), 0;
+                            test0 <- gt(n, val(0, int(10))), 0;
                         }),
                         exit: jc(test0, label("INIT1"), label("EXIT"))
                     }),
@@ -1121,28 +1282,28 @@ mod tests {
                         prevs: vec![],
                         body: DFGBBBody::Seq(dfg!{
                             // TODO: wait for finish read
-                            v0 <- call!(arr, read, [i], []), 0;
-                            test0 <- gt(n, val(1, int(32))), 0;
+                            v0 <- call!(arr, read, [val(0, int(10))], []), 0;
+                            test1 <- gt(n, val(1, int(10))), 0;
                         }),
-                        exit: jc(test0, label("LOOP"), label("EXIT"))
+                        exit: jc(test1, label("LOOP"), label("EXIT"))
                     }),
                     (label("LOOP"), DFGBB {
                         prevs: vec![label("INIT")],
                         body: DFGBBBody::Pipe(dfg!{
-                            i <- mu(val(1, int(32)), i_next), 0;
-                            sum <- mu(val(0, int(32)), sum_next), 0;
-                            v <- mu(v0, v_next), 1;
-                            i_next <- plus(i, val(1, int(32))), 0;
+                            i <- mu(val(1, int(10)), i_next), 0;
+                            sum <- mu(val(0, int(32)), sum_next), 1;
+                            v <- mu(v0, v_next), 2;
+                            i_next <- plus(i, val(1, int(10))), 0;
                             v_next <- call!(arr, read, [i], []), 0;
-                            sum_next <- plus(sum, v), 1;
+                            sum_next <- plus(sum, v), 2;
                             loop_cond <- le(i_next, n), 0;
                         }, 1),
                         exit: jmp(label("EXIT"))
                     }),
                     (label("EXIT"), DFGBB {
-                        prevs: vec![label("INIT"), label("LOOP")],
+                        prevs: vec![label("INIT"), label("INIT1"), label("LOOP")],
                         body: DFGBBBody::Seq(dfg!{
-                            res <- ita(val(0, int(32)), sum_next), 0;
+                            res <- ita3(val(0, int(32)), v0, sum_next), 0;
                         }),
                         exit: ret()
                     })
@@ -1151,7 +1312,7 @@ mod tests {
             }
         };
 
-        run_test(&ir);
+        run_test(&ir, true);
     }
 
 }

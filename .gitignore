@@ -3,4 +3,3 @@ obj_dir/
 *.vcd
 *.dot
 *.log
-test/*/*.v

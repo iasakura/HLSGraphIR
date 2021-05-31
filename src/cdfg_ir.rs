@@ -36,7 +36,8 @@ pub enum Expr {
     Copy (Arg),
     UnExp (UnOp, Arg),
     BinExp (BinOp, Arg, Arg),
-    TerExp (TerOp, Arg, Arg, Arg)
+    TerExp (TerOp, Arg, Arg, Arg),
+    Ita (Vec<Arg>)
 }
 
 pub trait ToArg {
@@ -91,6 +92,18 @@ pub fn copy<T: ToArg>(a: T) -> Expr {
     Expr::Copy (a.to_arg())
 }
 
+pub fn ita2<T1: ToArg, T2: ToArg>(a1: T1, a2: T2) -> Expr {
+    Expr::Ita(vec![a1.to_arg(), a2.to_arg()])
+}
+
+pub fn ita3<T1: ToArg, T2: ToArg, T3: ToArg>(a1: T1, a2: T2, a3: T3) -> Expr {
+    Expr::Ita(vec![a1.to_arg(), a2.to_arg(), a3.to_arg()])
+}
+
+pub fn ita4<T1: ToArg, T2: ToArg, T3: ToArg, T4: ToArg>(a1: T1, a2: T2, a3: T3, a4: T4) -> Expr {
+    Expr::Ita(vec![a1.to_arg(), a2.to_arg(), a3.to_arg(), a4.to_arg()])
+}
+
 
 #[macro_export]
 macro_rules! call {
@@ -118,7 +131,6 @@ gen_op_def!{unop( neg, UnOp::Neg )}
 gen_op_def!{unop( not, UnOp::Not )}
 
 gen_op_def!{binop( mu, BinOp::Mu )}
-gen_op_def!{binop( ita, BinOp::Ita )}
 gen_op_def!{binop( plus, BinOp::Plus )}
 gen_op_def!{binop( minus, BinOp::Minus )}
 gen_op_def!{binop( mult, BinOp::Mult )}
@@ -204,6 +216,11 @@ pub fn get_deps_of_expr<SCHED>(e: &Expr, dfg: &DFG<SCHED>) -> Vec<(Var, DepType)
                 .chain(get_var_of_arg(a3).iter())
                 .map(|v| (v.clone(), dep_of(v, dfg)))
                 .collect::<Vec<_>>()
+        }
+        Expr::Ita(args) => {
+            args.iter().flat_map(|arg| {
+                get_var_of_arg(arg).map(|v| (v.clone(), dep_of(&v, dfg)))
+            }).collect::<Vec<_>>()
         }
     }
 }
@@ -329,6 +346,16 @@ pub enum Signal {
     Enable,
     Done,
     Continue
+}
+
+impl Signal {
+    pub fn signal_name_suffix(&self) -> &str {
+        match self {
+            Signal::Enable => "en",
+            Signal::Done => "done",
+            Signal::Continue => "cont",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
