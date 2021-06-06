@@ -1448,4 +1448,33 @@ mod tests {
 
         run_test(&ir, true);
     }
+
+    #[test]
+    fn simple() {
+        let inp = &var("inp", int(32));
+        let res = &var("res", int(32));
+
+        let ir = GenCDFGIR {
+            resource_types: vec![].into_iter().collect::<IndexMap<_, _>>(),
+            module: GenCDFGModule {
+                name: "simple".to_string(),
+                start: label("START"),
+                params: vec![inp.clone()],
+                ports: vec![],
+                resources: IndexMap::new(),
+                cdfg: vec![
+                    (label("START"), DFGBB {
+                        prevs: vec![],
+                        body: DFGBBBody::Seq(dfg!{
+                            res <- plus(inp, val(1, int(32))), 0;
+                        }),
+                        exit: ret()
+                    }),
+                ].into_iter().collect::<IndexMap<_, _>>(),
+                returns: vec![res.clone()],
+            }
+        };
+
+        run_test(&ir, false);
+    }
 }
