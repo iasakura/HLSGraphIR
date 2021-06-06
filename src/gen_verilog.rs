@@ -86,10 +86,10 @@ pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
             genstmt!("localparam {} = {}", p.0, p.1);
         }
         for v in &ir.regs {
-            genstmt!("{}", make_var_decl("reg", &v.name, v.bits, v.idx));
+            genstmt!("{}", make_var_decl("logic", &v.name, v.bits, v.idx));
         }
         for var in &ir.wires {
-            genstmt!("{}", make_var_decl("wire", &var.name, var.bits, None));
+            genstmt!("{}", make_var_decl("logic", &var.name, var.bits, None));
         }
         for m in &ir.module_instantiations {
             let args_str = m.args.iter().map(|a| a.name.clone()).collect::<Vec<_>>().join(", ");
@@ -99,7 +99,7 @@ pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
             genstmt!("assign {} = {}", var, rhs);
         }
         for a in &ir.always {
-            genln!("always @(posedge {}) begin", a.clk.name);
+            genln!("always_ff @(posedge {}) begin", a.clk.name);
             {
                 let _s = Scope::new(cur_tab.clone());
                 genln!("if ({}) begin", a.cond);

@@ -185,15 +185,16 @@ pub fn vassign<T1: ToVVar, T2: ToVExpr>(lhs: T1, rhs: T2) -> VAssign {
 
 #[derive(Debug, Clone, Copy)]
 pub enum IOType {
-    Input, Output, OutputReg,
+    Input, Output, InputReg, OutputReg,
 }
 
 impl fmt::Display for IOType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             IOType::Input => write!(f, "input"),
-            IOType::OutputReg => write!(f, "output reg"),
-            IOType::Output => write!(f, "output")
+            IOType::InputReg => write!(f, "input logic"),
+            IOType::Output => write!(f, "output"),
+            IOType::OutputReg => write!(f, "output logic"),
         }
     }
 }

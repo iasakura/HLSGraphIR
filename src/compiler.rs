@@ -844,14 +844,14 @@ mod tests {
         }
 
         let verilog = compile_sched_cdfg_ir(ir);
-        gen_verilog::generate_verilog_to_file(&verilog, &format!("./test/{}/{}.v", name, name));
+        gen_verilog::generate_verilog_to_file(&verilog, &format!("./test/{}/{}.sv", name, name));
 
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-        let top_name = if top { "top" } else { name };
+        let top_name = if top { "top" } else { &name };
         let output = Command::new("sh")
             .arg("-c")
-            .arg(format!("cd {}/test/{} && verilator --trace --trace-params --trace-structs --trace-underscore -cc {}.v -exe sim.cc && make -C obj_dir -f V{}.mk && ./obj_dir/V{}", root.display(), name, top_name, top_name, top_name))
+            .arg(format!("cd {}/test/{} && verilator --trace --trace-params --trace-structs --trace-underscore -cc {} -exe sim.cc && make -C obj_dir -f V{}.mk && ./obj_dir/V{}", root.display(), name, top_name, top_name, top_name))
             .output()
             .expect("failed to execute process");
 
