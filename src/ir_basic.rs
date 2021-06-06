@@ -61,6 +61,9 @@ pub enum BinOp {
     And,
     Or,
 
+    Lshift,
+    Rshift,
+
     Mu,
 }
 
@@ -88,6 +91,9 @@ impl fmt::Display for BinOp {
 
             BinOp::And => write!(f, "&&"),
             BinOp::Or => write!(f, "||"),
+
+            BinOp::Lshift => write!(f, "<<"),
+            BinOp::Rshift => write!(f, ">>"),
 
             BinOp::Mu => write!(f, "Mu"),
         }

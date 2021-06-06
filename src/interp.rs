@@ -57,6 +57,10 @@ fn interp_binop(op: &BinOp, arg1: &Arg, arg2: &Arg, env: &Env, prev_index: i32, 
         BinOp::LE => to_int(v1 <= v2),
         BinOp::GE => to_int(v1 >= v2),
 
+        BinOp::Lshift => v1 << v2,
+        // TODO: logical right shift is correct behavior 
+        BinOp::Rshift => v1 >> v2,
+
         BinOp::And => to_int(to_bool(v1) && to_bool(v2)),
         BinOp::Or => to_int(to_bool(v1) || to_bool(v2)),
 

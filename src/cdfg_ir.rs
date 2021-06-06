@@ -136,6 +136,8 @@ gen_op_def!{binop( minus, BinOp::Minus )}
 gen_op_def!{binop( mult, BinOp::Mult )}
 gen_op_def!{binop( div, BinOp::Div )}
 gen_op_def!{binop( mod_, BinOp::Mod )}
+gen_op_def!{binop( lshift, BinOp::Lshift )}
+gen_op_def!{binop( rshift, BinOp::Rshift )}
 gen_op_def!{binop( eq, BinOp::EQ )}
 gen_op_def!{binop( lt, BinOp::LT )}
 gen_op_def!{binop( le, BinOp::LE )}
