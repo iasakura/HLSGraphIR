@@ -77,6 +77,13 @@ void test(int n, const std::string& name) {
         finish = dut->finish;
     }
 
+    for (int i = 0; i < 1000; ++i) {
+        dut->clk = !dut->clk;
+        time_counter++;
+        dut->eval();
+        tfp->dump(time_counter);
+    }
+
     printf("sum_of_array(%d) = %d in %d cycle\n", n, dut->res, cycle);
 
     dut->final();
