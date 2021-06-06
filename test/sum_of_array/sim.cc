@@ -70,7 +70,7 @@ void test(int n, const std::string& name) {
 
         if (dut->clk) {
             printf("read_addr = %d\n", dut->top__DOT__arr_read_val);
-            print_array(n, dut->top__DOT__m0__DOT__ram);
+            // print_array(n, dut->top__DOT__m0__DOT__ram);
         }
         dut->eval();
         tfp->dump(time_counter);
