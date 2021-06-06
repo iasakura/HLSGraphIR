@@ -1,8 +1,8 @@
-#[macro_use]
-extern crate hls_graph_ir;
+// #[macro_use]
+// extern crate hls_graph_ir;
 
-use hls_graph_ir::dsl;
-use hls_graph_ir::interp;
+// use hls_graph_ir::dsl;
+// use hls_graph_ir::interp;
 
 // #![feature(trace_macros)]
 // trace_macros!(true);

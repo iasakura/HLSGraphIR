@@ -3,9 +3,7 @@ use std::io;
 use std::fs;
 use std::str;
 
-use crate::ir_basic::*;
 use crate::cdfg_ir::*;
-use crate::dfg;
 
 #[derive(Clone)]
 struct Edge(Var, Var, DepType);
@@ -102,6 +100,8 @@ pub fn gen_graphviz_from_dfg<SCHED: Clone + SchedToLabel>(graph: &DFG<SCHED>, fi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir_basic::{int, val};
+    use crate::dfg;
 
     fn init() {
         let _ = env_logger::builder().is_test(true).try_init();

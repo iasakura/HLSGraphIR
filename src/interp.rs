@@ -41,7 +41,7 @@ fn to_bool(i: i32) -> bool {
     }
 }
 
-fn interp_binop(op: &BinOp, arg1: &Arg, arg2: &Arg, env: &Env, prev_index: i32, is_first: bool) -> i32 {
+fn interp_binop(op: &BinOp, arg1: &Arg, arg2: &Arg, env: &Env, _prev_index: i32, is_first: bool) -> i32 {
     let v1 = interp_arg(arg1, env);
     let v2 = interp_arg(arg2, env);
     match op {

@@ -7,7 +7,7 @@ use std::cmp;
 use std::iter;
 
 use indexmap::map::{IndexMap, Entry};
-use log::{debug, error, log_enabled, info, Level};
+use log::{debug, log_enabled, Level};
 
 const FINISH_STATE : &'static str = "__FINISH";
 
@@ -55,7 +55,7 @@ struct CompilerState {
     dones: IndexMap<Label, VVar>,
     states: IndexMap<Label, VExpr>,
 
-    resource_types: IndexMap<String, ResourceType>,
+    // resource_types: IndexMap<String, ResourceType>,
     resource_signal_map: IndexMap<String, ResourceInterface>,
 
     fresh_name_counter: u32,
@@ -134,7 +134,7 @@ fn create_resource_map(resources: &IndexMap<String, String>, ports: &Vec<(String
     }).collect::<IndexMap<_, _>>()
 }
 
-fn gen_verilog_io_signals(ir_params: &Vec<Var>, ir_returns: &Vec<Var>, ir_resource: &Vec<(String, String)>, resource_type: &IndexMap<String, ResourceType>, cs: &mut CompilerState) {
+fn gen_verilog_io_signals(ir_params: &Vec<Var>, ir_returns: &Vec<Var>, ir_resource: &Vec<(String, String)>, cs: &mut CompilerState) {
     let start = "start";
     let finish = "finish";
     let ctrl_sigs = vec![
@@ -156,11 +156,11 @@ fn gen_verilog_io_signals(ir_params: &Vec<Var>, ir_returns: &Vec<Var>, ir_resour
         (vvar(&var.name, var.type_.bits, None), IOType::OutputReg)
     });
 
-    let port_signals = ir_resource.iter().flat_map(|(res_name, res_type_name)| {
+    let port_signals = ir_resource.iter().flat_map(|(res_name, _res_type_name)| {
         let port = cs.resource_signal_map.get(res_name).expect(&format!("Resource {} is not found", res_name));
         let clk = port.clk.iter().map(|clk| (clk.clone(), IOType::Output));
         let reset_n = port.reset_n.iter().map(|reset_n| (reset_n.clone(), IOType::Output));
-        let meth_sigs = port.methods.iter().flat_map(|(meth_name, meth)| {
+        let meth_sigs = port.methods.iter().flat_map(|(_meth_name, meth)| {
             let ctrl_signals = vec![
                 (meth.en.clone(), IOType::Output), 
                 (meth.done.clone(), IOType::Input),
@@ -191,13 +191,13 @@ impl CompilerState {
             finish: vvar("dummy", 0, None),
             ens: IndexMap::new(), dones: IndexMap::new(), states: IndexMap::new(),
 
-            resource_types: ir.resource_types.clone(),
+            // resource_types: ir.resource_types.clone(),
             resource_signal_map: IndexMap::new(),
 
             fresh_name_counter: 0
         };
         cs.resource_signal_map = create_resource_map(&ir.module.resources, &ir.module.ports, &ir.resource_types, &mut cs);
-        gen_verilog_io_signals(&ir.module.params, &ir.module.returns, &ir.module.ports, &ir.resource_types, &mut cs);
+        gen_verilog_io_signals(&ir.module.params, &ir.module.returns, &ir.module.ports, &mut cs);
 
         // Create states for all CFG block & a final states
         let finish_state = FINISH_STATE.to_string();
@@ -449,12 +449,13 @@ fn gen_cfg_state_machine(module: &SchedCDFGModule, cs: &mut CompilerState, init_
     let rst_n = make_rst_n();
 
     let not_reset = (&rst_n).to_vexpr();
-    let reset = vnot(&rst_n);
+    let _reset = vnot(&rst_n);
 
     // State machine init
     {
         let start = &module.start;
         let start_state = get(&cs.states, &start);
+
         let mut assigns = Vec::<VAssign>::new();
         assigns.push(vassign(&cs.cur_state, start_state));
         assigns.push(vassign(&cs.prev_state, start_state));
@@ -534,9 +535,9 @@ fn min_sched_time(dfg: &DFG<Sched>) -> u32 {
     dfg.iter().map(|(_, node)| { node.sched.sched }).min().expect("Error: No nodes.\n")
 }
 
-fn max_sched_time(dfg: &DFG<Sched>) -> u32 {
-    dfg.iter().map(|(_, node)| { node.sched.sched }).max().expect("Error: No nodes.\n")
-}
+// fn max_sched_time(dfg: &DFG<Sched>) -> u32 {
+//     dfg.iter().map(|(_, node)| { node.sched.sched }).max().expect("Error: No nodes.\n")
+// }
 
 // None means it is variable latency
 fn get_latency(timing: &Timing) -> Option<u32> {
@@ -832,7 +833,7 @@ mod tests {
         String::from(v)
     }
     
-    fn run_test(ir: &SchedCDFGIR, top: bool ) {
+    fn run_test(ir: &SchedCDFGIR, top: bool) {
         let name = &ir.module.name;
 
         for (l, dfg) in &ir.module.cdfg {

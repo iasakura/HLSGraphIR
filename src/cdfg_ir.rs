@@ -1,5 +1,4 @@
 use std::fmt;
-use std::rc::Rc;
 
 use indexmap::map::IndexMap;
 use indexmap::set::IndexSet;
