@@ -78,7 +78,7 @@ impl<'a, SCHED: Clone + SchedToLabel> dot::GraphWalk<'a, DFGNode<SCHED>, Edge> f
     fn source(&'a self, edge: &Edge) -> DFGNode<SCHED> {
         self.get(&edge.0).unwrap().clone()
     }
-    
+
     fn target(&'a self, edge: &Edge) -> DFGNode<SCHED> {
         self.get(&edge.1).unwrap().clone()
     }

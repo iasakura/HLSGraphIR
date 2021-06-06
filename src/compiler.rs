@@ -79,7 +79,7 @@ fn bits_of_states(n: u32) -> u32 {
 fn create_resource_map(resources: &IndexMap<String, String>, ports: &Vec<(String, String)>, resource_types: &IndexMap<String, ResourceType>, cs: &mut CompilerState) -> IndexMap<String, ResourceInterface> {
     // For each resources (resource_name, resource_type_name)
     // the second bool element means the resource is internal
-    let all_resources = 
+    let all_resources =
         resources.iter().map(|v| (v, true)).chain(ports.iter().map(|tup| ((&tup.0, &tup.1), false)));
 
     all_resources.map(|((res_name, type_name), is_internal)| {
@@ -87,7 +87,7 @@ fn create_resource_map(resources: &IndexMap<String, String>, ports: &Vec<(String
         // For each methods in the resource
         let methods = res_type.methods.iter().map( |(meth_name, method)| {
             let prefix = format!("{}_{}", res_name, meth_name);
-            let args = method.inputs.iter().map( |arg_name| 
+            let args = method.inputs.iter().map( |arg_name|
                 if is_internal {
                     let wire = cs.new_wire(&format!("{}_{}_wire", prefix, arg_name.name), arg_name.type_.bits, None);
                     let arg = cs.new_assign(&format!("{}_{}_arg", prefix, arg_name.name), arg_name.type_.bits, None, (&wire).to_vexpr());
@@ -142,14 +142,14 @@ fn create_resource_map(resources: &IndexMap<String, String>, ports: &Vec<(String
                 (sig, arg)
             }).collect::<IndexMap<_, _>>();
 
-            (meth_name.clone(), MethodInterface {args, rets, 
+            (meth_name.clone(), MethodInterface {args, rets,
                 en: in_signal_map.get(&Signal::Enable).unwrap().clone(),
                 done: out_signal_map.get(&Signal::Done).unwrap().clone(),
                 cont: out_signal_map.get(&Signal::Continue).unwrap().clone(),
                 timing: method.timing.clone(),
             })
         }).collect::<IndexMap<_, _>>();
-        
+
         // TODO: Implement clk & reset specification
         let mod_clk = vvar(format!("{}_clk", &res_name), 1, None);
         cs.assign(&mod_clk, vvar("clk", 1, None).to_vexpr());
@@ -165,8 +165,8 @@ fn gen_verilog_io_signals(ir_params: &Vec<Var>, ir_returns: &Vec<Var>, ir_resour
     let start = "start";
     let finish = "finish";
     let ctrl_sigs = vec![
-        ("clk", IOType::Input), 
-        ("rst_n", IOType::Input), 
+        ("clk", IOType::Input),
+        ("rst_n", IOType::Input),
         (start, IOType::Input),
         (finish, IOType::OutputReg)
     ];
@@ -189,7 +189,7 @@ fn gen_verilog_io_signals(ir_params: &Vec<Var>, ir_returns: &Vec<Var>, ir_resour
         let reset_n = port.reset_n.iter().map(|reset_n| (reset_n.clone(), IOType::Output));
         let meth_sigs = port.methods.iter().flat_map(|(_meth_name, meth)| {
             let ctrl_signals = vec![
-                (meth.en.clone().map(|v| v.0), IOType::Output), 
+                (meth.en.clone().map(|v| v.0), IOType::Output),
                 (meth.done.clone(), IOType::Input),
                 (meth.cont.clone(), IOType::Input)
             ].into_iter().flat_map(|(var, io_type)| var.into_iter().map(move |v| (v, io_type) ));
@@ -207,9 +207,9 @@ fn gen_verilog_io_signals(ir_params: &Vec<Var>, ir_returns: &Vec<Var>, ir_resour
 
 impl CompilerState {
     fn init(ir: &SchedCDFGIR) -> CompilerState {
-        // Create initial compiler state. 
+        // Create initial compiler state.
         // Don't forget to update dummy variables.
-        let mut cs = CompilerState { 
+        let mut cs = CompilerState {
             io: vec![],
             localparams: vec![], regs: vec![], wires: vec![], assigns: vec![], always: vec![], ex_mux: IndexMap::new(),
             cur_state: vvar("dummy", 0, None),
@@ -255,9 +255,9 @@ impl CompilerState {
             debug!("defined vars of {} = {:?}", _l, vars);
             for v in vars {
                 if !ir.module.returns.iter().any(|ret_var| ret_var == v) {
-                cs.new_reg(&v.name, v.type_.bits, None);
+                    cs.new_reg(&v.name, v.type_.bits, None);
+                }
             }
-        }
         }
 
         cs
@@ -379,7 +379,7 @@ fn ir_expr_to_vexpr(e: &Expr, is_first: Option<&VVar>, prevs: &Vec<Label>, cond:
                     } else {
                         panic!("Mu requires is_first");
                     }
-                    
+
                 }
                 _ => binexp(*op, ir_arg_to_vexpr(a1), ir_arg_to_vexpr(a2)),
             }
@@ -437,7 +437,7 @@ fn rename_with_sched(a: &Arg, i: u32, deps: &IndexMap<Var, DepType>, dfg: &Index
             };
             match dfg.get(v) {
                 // Operation chaining
-                // TODO: support multi cycle opertaion: node.sched.sched + latancy of node = ii * dist + i 
+                // TODO: support multi cycle opertaion: node.sched.sched + latancy of node = ii * dist + i
                 Some(node) if node.sched.sched == i + ii * dist => Arg::Var(Var { name: format!("{}_wire", v.name), ..v.clone() }),
                 _ => Arg::Var(v.clone())
             }
@@ -471,7 +471,7 @@ fn make_rst_n() -> VVar {
     vvar("rst_n", 1, None)
 }
 
-// Create CFG state machine and returs en/done signals 
+// Create CFG state machine and returs en/done signals
 fn gen_cfg_state_machine(module: &SchedCDFGModule, cs: &mut CompilerState, init_actions: &IndexMap<Label, Vec<VAssign>>) {
     // make CFG FSM
     let rst_n = make_rst_n();
@@ -524,7 +524,7 @@ fn gen_cfg_state_machine(module: &SchedCDFGModule, cs: &mut CompilerState, init_
         // prev_state <= cur_state
         let prev_assign = vassign(&cs.prev_state, &cs.cur_state);
         cs.add_event(all_true(&conds), vec![disable, prev_assign]);
-        
+
         let mut add_transition = |next_l: &Label, extra_cond: &Option<VExpr>| {
             let next_state = get(&cs.states, next_l);
             let next_en = get(&cs.ens, next_l);
@@ -541,7 +541,7 @@ fn gen_cfg_state_machine(module: &SchedCDFGModule, cs: &mut CompilerState, init_
                 None => {
                     cs.add_event(all_true(&conds), actions);
                 }
-                Some (c) => { 
+                Some (c) => {
                     // TODO: Refactor
                     conds.push(c.clone());
                     cs.add_event(all_true(&conds), actions);
@@ -655,11 +655,11 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
             let mut new_conds = conds.clone();
             new_conds.push(cnt_eq_n(i));
             let call_cond = all_true(&new_conds);
-            
+
             let rhs = ir_expr_to_vexpr_with_sched(&stmt.expr, i, None, prevs, &call_cond, cs, dfg, 0);
             let var = ir_var_to_vvar(&stmt.var);
             let wire = cs.new_assign(&format!("{}_wire", var.name), var.bits, var.idx, rhs);
-            
+
             let mut new_conds = conds.clone();
             new_conds.push(cnt_eq_n(i + lat));
             let arrival_cond = all_true(&new_conds);
@@ -714,7 +714,7 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: u32, cs
         inits.push(vassign(varr_at(&stage_en, i), FALSE));
     }
     inits.push(vassign(&is_first, TRUE));
-    
+
     let rst_n = &make_rst_n();
 
     let mut conds = vec![rst_n.to_vexpr(), get(&cs.ens, l).to_vexpr()];
@@ -735,7 +735,7 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: u32, cs
 
             let rhs = ir_expr_to_vexpr_with_sched(&stmt.expr, i, Some(&varr_at(&stage_is_first, i)), prevs, &call_cond, cs, dfg, ii);
             let wire = cs.new_assign(&format!("{}_wire", stmt.var.name), stmt.var.type_.bits, None, rhs);
-            
+
             let var = if is_loop_cond(stmt) {
                 cs.new_reg(&format!("{}_loop_cond", l), 1, None)
             } else {
@@ -780,7 +780,7 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: u32, cs
             actions.push(vassign(varr_at(&stage_en, i), varr_at(&stage_en, i - 1)));
         }
         cs.add_event(all_true(&conds), actions);
-        
+
         {
             // if (cnt == 0) {
             conds.push(veq(&cnt, val(0, uint(ii_nbits))));
@@ -801,7 +801,7 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: u32, cs
         }
 
         if let Some((_, _, loop_cond_reg)) = loop_conds {
-            let stage_all_disabled_expr = all_true(&(min_stage..=max_stage).map(|i| 
+            let stage_all_disabled_expr = all_true(&(min_stage..=max_stage).map(|i|
                 vnot(varr_at(&stage_en, i))
             ).collect::<Vec<_>>());
             let stage_all_disabled = cs.new_assign(&format!("{}_stage_all_disabled", l), 1, None, stage_all_disabled_expr);
@@ -841,9 +841,9 @@ pub fn compile_sched_cdfg_ir(ir: &SchedCDFGIR) ->VerilogIR {
     let mut cs = CompilerState::init(&ir);
     gen_verilog_definitions(&ir.module, &mut cs);
     // TODO: implement module instantiations
-    VerilogIR { 
+    VerilogIR {
         name: name.clone(),
-        localparams: cs.localparams, 
+        localparams: cs.localparams,
         io_signals: cs.io,
         regs: cs.regs,
         wires: cs.wires,
@@ -873,13 +873,13 @@ mod tests {
     fn s(v: &str) -> String {
         String::from(v)
     }
-    
+
     fn run_test(ir: &SchedCDFGIR, top: bool) {
         let name = &ir.module.name;
 
         for (l, dfg) in &ir.module.cdfg {
             match &dfg.body {
-                DFGBBBody::Seq(dfg) | DFGBBBody::Pipe(dfg, _) => 
+                DFGBBBody::Seq(dfg) | DFGBBBody::Pipe(dfg, _) =>
                     gen_graphviz::gen_graphviz_from_dfg(dfg, &format!("./test/{}/{}.dot", name, l))
             }
         }
@@ -948,7 +948,7 @@ mod tests {
                 cur2 <- select(tmp5, tmp1, tmp3), 1;
                 step2 <- plus(step1, val(1, int(32))), 1;
                 loop_cond <- gt(cur2, val(1, int(32))), 1;
-            }, 2),            
+            }, 2),
             exit: ExitOp::JMP(s("EXIT")),
         });
 

@@ -124,7 +124,7 @@ pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
                 {
                     let _s = Scope::new(cur_tab.clone());
                     for (i, (_, rhs)) in mux.iter().enumerate() {
-                        let case_cond = (0..n).map(|j| 
+                        let case_cond = (0..n).map(|j|
                             if i == j { "1" }
                             else { "0" }
                         ).collect::<Vec<_>>().join("");
@@ -169,7 +169,7 @@ fn generate_verilog_test() {
         ],
         module_instantiations: vec![], // TODO: Add sample case
         regs: vec![
-            vvar("a", 32, Some(3)), 
+            vvar("a", 32, Some(3)),
             vvar("b", 64, None)
         ],
         wires: vec![

@@ -79,7 +79,7 @@ macro_rules! gen_op_def {
             Expr::BinExp($op, a1.to_arg(), a2.to_arg())
         }
     };
-    
+
     (terop ( $name: ident, $op: expr) ) => {
         pub fn $name<T1: ToArg, T2: ToArg, T3: ToArg>(a1: T1, a2: T2, a3: T3) -> Expr {
             Expr::TerExp($op, a1.to_arg(), a2.to_arg(), a3.to_arg())
@@ -107,7 +107,7 @@ pub fn ita4<T1: ToArg, T2: ToArg, T3: ToArg, T4: ToArg>(a1: T1, a2: T2, a3: T3, 
 #[macro_export]
 macro_rules! call {
     ($mod_name:ident, $meth_name:ident, [$( $arg:expr ),*], [$($dep:expr),*])  => {
-        crate::cdfg_ir::Expr::Call( 
+        crate::cdfg_ir::Expr::Call(
             stringify!($mod_name).to_string(),
             stringify!($meth_name).to_string(),
             vec![
@@ -194,7 +194,7 @@ pub fn get_deps_of_expr<SCHED>(e: &Expr, dfg: &DFG<SCHED>) -> Vec<(Var, DepType)
                 .chain(deps.into_iter().map(|v| v.clone()))
                 .collect::<Vec<_>>()
         }
-        Expr::Copy(a) | Expr::UnExp(_, a) => 
+        Expr::Copy(a) | Expr::UnExp(_, a) =>
             get_var_of_arg(a).iter().map(|v| (v.clone(), dep_of(v, dfg))).collect::<Vec<_>>(),
         Expr::BinExp(op, a1, a2) => {
             match op {
@@ -204,7 +204,7 @@ pub fn get_deps_of_expr<SCHED>(e: &Expr, dfg: &DFG<SCHED>) -> Vec<(Var, DepType)
                     ds.append(&mut v2);
                     ds
                 },
-                _ => 
+                _ =>
                     get_var_of_arg(a1).iter()
                         .chain(get_var_of_arg(a2).iter())
                         .map(|v| (v.clone(), dep_of(v, dfg)))
@@ -257,7 +257,7 @@ pub enum BBBody {
 
 #[derive(Debug)]
 pub struct BB {
-    pub prevs: Vec<Label>, 
+    pub prevs: Vec<Label>,
     pub body: BBBody,
     pub exit: ExitOp
 }
@@ -301,7 +301,7 @@ pub type DFG<SCHED> = IndexMap<Var, DFGNode<SCHED>>;
 
 pub fn to_dfg<SCHED>(nodes: Vec<(Stmt, SCHED)>) -> DFG<SCHED> {
     let mut ret = IndexMap::new();
-    for (stmt, sched) in nodes { 
+    for (stmt, sched) in nodes {
         ret.insert(stmt.var.clone(), DFGNode {stmt, sched});
     }
     ret
@@ -329,7 +329,7 @@ pub enum DFGBBBody<SCHED, II> {
 
 #[derive(Debug)]
 pub struct DFGBB<SCHED, II> {
-    pub prevs: Vec<Label>, 
+    pub prevs: Vec<Label>,
     pub body: DFGBBBody<SCHED, II>,
     pub exit: ExitOp
 }

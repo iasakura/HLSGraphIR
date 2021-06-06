@@ -56,27 +56,27 @@ macro_rules! to_exit {
 macro_rules! to_bb {
     ( { prevs ( $($from_name:ident),* ) loop $bb_body:tt while $cond:tt exit $bb_exit:tt } ) => {
         hls_graph_ir::types::BB {
-            prevs: vec![$(String::from(stringify!($from_name))),*], 
-            body: hls_graph_ir::types::BBBody::PipeBB (to_body!($bb_body), to_expr_with_paren!($cond)), 
+            prevs: vec![$(String::from(stringify!($from_name))),*],
+            body: hls_graph_ir::types::BBBody::PipeBB (to_body!($bb_body), to_expr_with_paren!($cond)),
             exit: to_exit!($bb_exit)
         }
     };
     ( { prevs ( $($from_name:ident),* ) seq $bb_body:tt exit $bb_exit:tt } ) => {
         hls_graph_ir::types::BB {
-            prevs: vec![$(String::from(stringify!($from_name))),*], 
+            prevs: vec![$(String::from(stringify!($from_name))),*],
             body: hls_graph_ir::types::BBBody::SeqBB (to_body!($bb_body)),
             exit: to_exit!($bb_exit)
         }
-        
+
     };
 }
 
 #[macro_export]
 macro_rules! loop_ir {
-    ( 
+    (
         $name:ident( $( $param:ident ),* ) {
             starts $start_label:ident
-            $( 
+            $(
                 $bb_name:ident $bb:tt
             ),*
             returns ( $( $ret:ident ),* )
@@ -86,7 +86,7 @@ macro_rules! loop_ir {
             name: String::from(stringify!($name)),
             start: String::from(stringify!($start_label)),
             params: vec![ $( hls_graph_ir::types::Var { name: String::from(stringify!($param)) } ),* ],
-            cfg: vec![ $( (String::from(stringify!($bb_name)), 
+            cfg: vec![ $( (String::from(stringify!($bb_name)),
                            to_bb!($bb))),* ].into_iter().collect(),
             returns: vec!( $( hls_graph_ir::types::Var { name: String::from(stringify!($ret)) } ),* )
         }

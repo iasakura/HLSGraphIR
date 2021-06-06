@@ -208,7 +208,7 @@ pub struct VAlways {
 
 #[derive(Debug)]
 pub struct ModuleInstantiation {
-    pub name: String, 
+    pub name: String,
     pub args: Vec<VVar>
 }
 
