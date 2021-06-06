@@ -98,9 +98,9 @@ pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
         for (var, rhs) in &ir.assigns {
             genstmt!("assign {} = {}", var, rhs);
         }
-        for a in &ir.always {
-            genln!("always_ff @(posedge {}) begin", a.clk.name);
-            {
+        genln!("always_ff @(posedge {}) begin", ir.clk);
+        {
+            for a in &ir.always {
                 let _s = Scope::new(cur_tab.clone());
                 genln!("if ({}) begin", a.cond);
                 {
@@ -111,8 +111,8 @@ pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
                 }
                 genln!("end");
             }
-            genln!("end");
         }
+        genln!("end");
         for (lhs, mux) in &ir.ex_mux {
             // genstmt!("{}", make_var_decl("wire", &lhs.name, lhs.bits, None));
             genln!("always_comb begin");
@@ -159,6 +159,8 @@ fn generate_verilog_test() {
         localparams: vec![
             (vvar("CONSTANT", 1, None), 42),
         ],
+        clk: vvar("clk", 1, None),
+        rst_n: vvar("rst_n", 1, None),
         io_signals: vec![
             (vvar("clk", 1, None), IOType::Input),
             (vvar("rst_n", 1, None), IOType::Input),

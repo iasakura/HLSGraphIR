@@ -221,6 +221,8 @@ pub struct VerilogIR {
     pub name: String,
     pub localparams: Vec<(VVar, i32)>,
     pub module_instantiations: Vec<ModuleInstantiation>,
+    pub clk: VVar,
+    pub rst_n: VVar,
     pub io_signals: Vec<(VVar, IOType)>,
     pub regs: Vec<VVar>,
     pub wires: Vec<VVar>,

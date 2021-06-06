@@ -845,6 +845,9 @@ pub fn compile_sched_cdfg_ir(ir: &SchedCDFGIR) ->VerilogIR {
         name: name.clone(),
         localparams: cs.localparams,
         io_signals: cs.io,
+        // TODO: make names consistent with ones generated in gen_verilog_defenitions
+        clk: vvar("clk", 1, None),
+        rst_n: vvar("rst_n", 1, None),
         regs: cs.regs,
         wires: cs.wires,
         assigns: cs.assigns,
