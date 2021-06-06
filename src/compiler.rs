@@ -492,8 +492,21 @@ fn gen_cfg_state_machine(module: &SchedCDFGModule, cs: &mut CompilerState, init_
         for a in init_actions.get(start).unwrap() {
             assigns.push(a.clone());
         }
-        // TODO: Add initialization of ``start'' state
-        cs.add_event(reset, assigns);
+        for (st, en) in &cs.ens {
+            if st != start {
+                assigns.push(vassign(en, FALSE));
+            }
+        }
+        for (_st, done) in &cs.dones {
+            assigns.push(vassign(done, FALSE));
+        }
+        assigns.push(vassign(&cs.finish, FALSE));
+
+        let start_reg = &cs.new_reg(&format!("{}_reg", cs.start.name), cs.start.bits, cs.start.idx);
+        cs.add_event(TRUE.to_vexpr(), vec![vassign(start_reg, (&cs.start).to_vexpr())]);
+
+        let conds = vec![not_reset.clone(), (&cs.start).to_vexpr(), vnot(start_reg.to_vexpr())];
+        cs.add_event(all_true(&conds), assigns);
     }
 
     for (l, bb) in &module.cdfg {
