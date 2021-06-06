@@ -254,8 +254,10 @@ impl CompilerState {
             let vars = collect_vars(&dfgbb);
             debug!("defined vars of {} = {:?}", _l, vars);
             for v in vars {
+                if !ir.module.returns.iter().any(|ret_var| ret_var == v) {
                 cs.new_reg(&v.name, v.type_.bits, None);
             }
+        }
         }
 
         cs
