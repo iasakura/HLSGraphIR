@@ -18,10 +18,10 @@ const FINISH_STATE : &'static str = "__FINISH";
 
 #[derive(Clone)]
 struct MethodInterface {
-    args: Vec<VVar>,
+    args: Vec<(VVar, VVar)>,
     rets: Vec<VVar>,
 
-    en: Option<VVar>,
+    en: Option<(VVar, VVar)>,
     done: Option<VVar>,
     cont: Option<VVar>,
 
@@ -89,11 +89,17 @@ fn create_resource_map(resources: &IndexMap<String, String>, ports: &Vec<(String
             let prefix = format!("{}_{}", res_name, meth_name);
             let args = method.inputs.iter().map( |arg_name| 
                 if is_internal {
-                    cs.new_wire(&format!("{}_{}_arg", prefix, arg_name.name), arg_name.type_.bits, None)
+                    let wire = cs.new_wire(&format!("{}_{}_wire", prefix, arg_name.name), arg_name.type_.bits, None);
+                    let arg = cs.new_assign(&format!("{}_{}_arg", prefix, arg_name.name), arg_name.type_.bits, None, (&wire).to_vexpr());
+                    (arg, wire)
                 } else {
-                    vvar(&format!("{}_{}_arg", prefix, arg_name.name), arg_name.type_.bits, None)
+                    let arg = vvar(&format!("{}_{}_arg", prefix, arg_name.name), arg_name.type_.bits, None);
+                    let wire = cs.new_wire(&format!("{}_{}_wire", prefix, arg_name.name), arg_name.type_.bits, None);
+                    cs.assign(&arg, (&wire).to_vexpr());
+                    (arg, wire)
                 }
             ).collect::<Vec<_>>();
+
             let rets = method.outputs.iter().map( |out_name|
                 if is_internal {
                     cs.new_wire(&format!("{}_{}_ret", prefix, out_name.name), out_name.type_.bits, None)
@@ -101,24 +107,45 @@ fn create_resource_map(resources: &IndexMap<String, String>, ports: &Vec<(String
                     vvar(&format!("{}_{}_ret", prefix, out_name.name), out_name.type_.bits, None)
                 }
             ).collect::<Vec<_>>();
-            let signals = [Signal::Enable, Signal::Done, Signal::Continue].iter();
-            let signal_map = signals.map(|sig| {
-                let wire = if method.interface_signal.contains(sig) {
+            let in_signals = [Signal::Enable].iter();
+            let out_signals = [Signal::Done, Signal::Continue].iter();
+            let in_signal_map = in_signals.map(|sig| {
+                let arg = if method.interface_signal.contains(sig) {
                     if is_internal {
-                        Some (cs.new_wire(&format!("{}_{}", &prefix, sig.signal_name_suffix()), 1, None))
+                        let wire = cs.new_wire(&format!("{}_{}_wire", &prefix, sig.signal_name_suffix()), 1, None);
+                        let arg = cs.new_assign(&format!("{}_{}", &prefix, sig.signal_name_suffix()), 1, None, (&wire).to_vexpr());
+                        Some((arg, wire))
                     } else {
-                        Some (vvar(&format!("{}_{}", &prefix, sig.signal_name_suffix()), 1, None))
+                        let arg = vvar(&format!("{}_{}", &prefix, sig.signal_name_suffix()), 1, None);
+                        let wire = cs.new_wire(&format!("{}_{}_wire", &prefix, sig.signal_name_suffix()), 1, None);
+                        cs.assign(&arg, (&wire).to_vexpr());
+                        Some((arg, wire))
                     }
                 } else {
                     None
                 };
-                (sig, wire)
+                (sig, arg)
             }).collect::<IndexMap<_, _>>();
-            let get_wire = |sig| { signal_map.get(sig).unwrap().clone() };
+
+            let out_signal_map = out_signals.map(|sig| {
+                let arg = if method.interface_signal.contains(sig) {
+                    if is_internal {
+                        let arg = cs.new_wire(&format!("{}_{}", &prefix, sig.signal_name_suffix()), 1, None);
+                        Some(arg)
+                    } else {
+                        let arg = vvar(&format!("{}_{}", &prefix, sig.signal_name_suffix()), 1, None);
+                        Some(arg)
+                    }
+                } else {
+                    None
+                };
+                (sig, arg)
+            }).collect::<IndexMap<_, _>>();
+
             (meth_name.clone(), MethodInterface {args, rets, 
-                en: get_wire(&Signal::Enable), 
-                done: get_wire(&Signal::Done), 
-                cont: get_wire(&Signal::Continue),
+                en: in_signal_map.get(&Signal::Enable).unwrap().clone(),
+                done: out_signal_map.get(&Signal::Done).unwrap().clone(),
+                cont: out_signal_map.get(&Signal::Continue).unwrap().clone(),
                 timing: method.timing.clone(),
             })
         }).collect::<IndexMap<_, _>>();
@@ -162,11 +189,11 @@ fn gen_verilog_io_signals(ir_params: &Vec<Var>, ir_returns: &Vec<Var>, ir_resour
         let reset_n = port.reset_n.iter().map(|reset_n| (reset_n.clone(), IOType::Output));
         let meth_sigs = port.methods.iter().flat_map(|(_meth_name, meth)| {
             let ctrl_signals = vec![
-                (meth.en.clone(), IOType::Output), 
+                (meth.en.clone().map(|v| v.0), IOType::Output), 
                 (meth.done.clone(), IOType::Input),
                 (meth.cont.clone(), IOType::Input)
             ].into_iter().flat_map(|(var, io_type)| var.into_iter().map(move |v| (v, io_type) ));
-            let args = meth.args.iter().map(|arg| (arg.clone(), IOType::Output));
+            let args = meth.args.iter().map(|arg| (arg.0.clone(), IOType::Output));
             let rets = meth.rets.iter().map(|ret| (ret.clone(), IOType::Input));
             ctrl_signals.chain(args).chain(rets)
         });
@@ -368,12 +395,13 @@ fn ir_expr_to_vexpr(e: &Expr, is_first: Option<&VVar>, prevs: &Vec<Label>, cond:
 
             // Generate arguments signals
             for (a_intf, a) in method.args.iter().zip(args) {
-                cs.add_case_to_ex_mut(a_intf, cond, &ir_arg_to_vexpr(&a));
+                cs.add_case_to_ex_mut(&a_intf.1, cond, &ir_arg_to_vexpr(&a));
             }
 
             // Generate enable
             if let Some(en) = &method.en {
-                cs.add_event(cond.clone(), vec![vassign(en, TRUE)]);
+                // cs.add_event(cond.clone(), vec![vassign(en, TRUE)]);
+                cs.add_case_to_ex_mut(&en.1, cond, &TRUE.to_vexpr());
             }
 
             (&method.rets[0]).to_vexpr()
@@ -382,8 +410,6 @@ fn ir_expr_to_vexpr(e: &Expr, is_first: Option<&VVar>, prevs: &Vec<Label>, cond:
             if prevs.len() != args.len() {
                 panic!("The number of prev node must be 2 for using Ita.\n");
             }
-            let t_label = &prevs[0];
-            let t_label_value = get(&cs.states, &t_label);
 
             let name = cs.fresh_name();
             let type_ = type_of_arg(&args[0]);
