@@ -89,7 +89,7 @@ pub fn generate_verilog_to_stream(ir: &VerilogIR, stream: &mut impl io::Write) {
             genstmt!("{}", make_var_decl("logic", &v.name, v.bits, v.idx));
         }
         for var in &ir.wires {
-            genstmt!("{}", make_var_decl("logic", &var.name, var.bits, None));
+            genstmt!("{}", make_var_decl("logic", &var.name, var.bits, var.idx));
         }
         for m in &ir.module_instantiations {
             let args_str = m.args.iter().map(|a| a.name.clone()).collect::<Vec<_>>().join(", ");
