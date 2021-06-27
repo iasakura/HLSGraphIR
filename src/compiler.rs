@@ -338,7 +338,17 @@ fn reduce_exprs(es: &Vec<VExpr>, op: BinOp) -> Option<VExpr> {
 }
 
 fn all_true(es: &Vec<VExpr>) -> VExpr {
-    reduce_exprs(es, BinOp::And).unwrap()
+    match reduce_exprs(es, BinOp::And) {
+        None => TRUE.to_vexpr(),
+        Some(x) => x
+    }
+}
+
+fn any_true(es: &Vec<VExpr>) -> VExpr {
+    match reduce_exprs(es, BinOp::And) {
+        None => FALSE.to_vexpr(),
+        Some(x) => x
+    }
 }
 
 fn ir_var_to_vvar(var: &Var) -> VVar {
@@ -573,7 +583,7 @@ fn gen_cfg_state_machine(module: &SchedCDFGModule, cs: &mut CompilerState, init_
 }
 
 fn min_sched_time(dfg: &DFG<Sched>) -> u32 {
-    dfg.iter().map(|(_, node)| { node.sched.sched }).min().expect("Error: No nodes.\n")
+    dfg.iter().map(|(_, node)| { node.sched.sched }).min().unwrap_or(0)
 }
 
 // fn max_sched_time(dfg: &DFG<Sched>) -> u32 {
@@ -600,14 +610,11 @@ fn get_latency_of_stmt(stmt: &Stmt, cs: &CompilerState) -> Option<u32> {
     }
 }
 
-fn max_lat_time(dfg: &DFG<Sched>, cs: &CompilerState) -> Option<u32> {
-    dfg.iter().fold(Some(0), |acc, (_, node)| {
-        match acc {
-            None => None,
-            Some (acc) => match get_latency_of_stmt(&node.stmt, cs).map(|x| {x + node.sched.sched}) {
-                None => None,
-                Some (lat) => Some (cmp::max(acc, node.sched.sched + lat))
-            }
+fn max_lat_time(dfg: &DFG<Sched>, cs: &CompilerState) -> u32 {
+    dfg.iter().fold(0, |acc, (_, node)| {
+        match get_latency_of_stmt(&node.stmt, cs).map(|x| {x + node.sched.sched}) {
+            None => cmp::max(acc, node.sched.sched),
+            Some (lat) => cmp::max(acc, node.sched.sched + lat)
         }
     })
 }
@@ -627,9 +634,10 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
     let not_reset = (&rst_n).to_vexpr();
 
     let min_time = min_sched_time(dfg);
-    let max_time = max_lat_time(dfg, cs).expect(&format!("TODO: Support variable latency"));
+    let max_time = max_lat_time(dfg, cs);
+
     let n_states = max_time - min_time + 1;
-    debug!("Generating time between {}..{}", min_time, max_time);
+    debug!("Generating stages between {}..{}", min_time, max_time);
 
     let nbits = bits_of_states(n_states);
     let cnt = cs.new_reg(&format!("{}_cnt", l), nbits, None);
@@ -638,7 +646,7 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
 
     let init_action = vassign(&cnt, val(min_time as i32, type_.clone()));
 
-    let sched_stmts = create_stage_stmt_map(dfg);
+    let sched_stmts = create_stage_stmt_map(dfg, cs);
 
     cs.add_event(all_true(&conds), vec![vassign(&cnt, vplus(&cnt, val(1, uint(nbits))))]);
 
@@ -647,9 +655,7 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
     };
 
     for i in min_time..=max_time {
-        let empty_vec = vec![];
-
-        for stmt in sched_stmts.get(&i).unwrap_or_else(|| &empty_vec) {
+        for stmt in sched_stmts.get(&i).unwrap() {
             let lat = get_latency_of_stmt(stmt, &cs).expect("TODO: support variable latency");
 
             let mut new_conds = conds.clone();
@@ -678,8 +684,15 @@ fn gen_seq_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, cs: &mut Com
     vec![init_action]
 }
 
-fn create_stage_stmt_map<'a>(dfg: &'a DFG<Sched>) -> IndexMap<u32, Vec<&'a Stmt>> {
+fn create_stage_stmt_map<'a>(dfg: &'a DFG<Sched>, cs: &CompilerState) -> IndexMap<u32, Vec<&'a Stmt>> {
+    let min_stage = min_sched_time(dfg);
+    let max_stage = max_lat_time(dfg, cs);
+
     let mut ret = IndexMap::<u32, Vec<&'a Stmt>>::new();
+    for i in min_stage..=max_stage {
+        ret.insert(i, vec![]);
+    }
+
     for (_v, node) in dfg {
         ret.entry(node.sched.sched).or_insert(vec![]).push(&node.stmt);
     };
@@ -695,16 +708,29 @@ fn varr_at<T: ToVVar>(arr: T, idx: u32) -> VVar {
     vvar(v.name, v.bits, Some(idx))
 }
 
+fn get_done_signal(expr: &Expr, cs: &CompilerState) -> Option<VVar> {
+    match expr {
+        Expr::Call(mod_name, meth_name, _, _) => {
+            let meth = cs.resource_signal_map.get(mod_name).expect(&format!("module {} is not found", mod_name))
+                .methods
+                .get(meth_name).expect(&format!("Method {} is not found in module {}", meth_name, mod_name));
+            meth.done.clone()
+        },
+        _ => None
+    }
+}
+
 // Create pipe machine, and returns its initialization actions.
 fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: u32, cs: &mut CompilerState) -> Vec<VAssign> {
     let min_stage = min_sched_time(dfg);
-    let max_stage = max_lat_time(dfg, cs).expect(&format!("TODO: Support variable latency"));
+    let max_stage = max_lat_time(dfg, cs);
+
     assert!(min_stage == 0);
     let ii_nbits = bits_of_states(ii + 1);
 
     let cnt = cs.new_reg(&format!("{}_cnt", l), ii_nbits, None);
-    let stage_en = cs.new_reg(&format!("{}_stage_en", l), 1, Some(max_stage + 1));
-    let stage_is_first = cs.new_reg(&format!("{}_stage_is_first", l), 1, Some(max_stage + 1));
+    let stage_en = cs.new_reg(&format!("{}_stage_en", l), 1, Some(max_stage - min_stage + 1));
+    let stage_is_first = cs.new_reg(&format!("{}_stage_is_first", l), 1, Some(max_stage - min_stage + 1));
     let is_first = cs.new_reg(&format!("{}_is_first", l), 1, None);
     // let is_pipeline_flush = cs.new_reg(format!("{}_pipeline_flush", l), 1, None);
 
@@ -718,17 +744,70 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: u32, cs
     let rst_n = &make_rst_n();
 
     let mut conds = vec![rst_n.to_vexpr(), get(&cs.ens, l).to_vexpr()];
-    let sched_stmts = create_stage_stmt_map(dfg);
+    let sched_stmts = create_stage_stmt_map(dfg, cs);
+
+    // Is this stage waiting for any operations to finish?
+    let is_waiting = cs.new_wire(&format!("{}_is_waiting", l), 1, Some(max_stage + 1));
+    // Is this stage stalling?
+    let is_stalling = cs.new_wire(&format!("{}_is_stalling", l), 1, Some(max_stage + 1));
+    // Is it enabled in this cycle?
+    let is_enabled_now = cs.new_wire(&format!("{}_is_enabled_now", l), 1, Some(max_stage - min_stage + 1));
+    let is_enabled_now_reg = cs.new_reg(&format!("{}_is_enabled_now_reg", l), 1, Some(max_stage - min_stage + 1));
+
+    for i in min_stage..=max_stage {
+        // is_enabled_now[i] <= is_stalling[i] ? 0 : 1;
+        cs.add_event(all_true(&conds), vec![vassign(
+            varr_at(&is_enabled_now_reg, i), vnot(varr_at(&is_stalling, i))
+        )]);
+        cs.assign(
+            &varr_at(&is_enabled_now, i),
+            vand(vnot(varr_at(&is_stalling, i)), varr_at(&is_enabled_now_reg, i))
+        );
+    }
+
+    let mut stmt_done_write_map = IndexMap::<Var, (VExpr, VExpr)>::new();
+    for i in min_stage..=max_stage {
+        for &stmt in sched_stmts.get(&i).unwrap() {
+            match get_done_signal(&stmt.expr, cs) {
+                Some (done_sig) => {
+                    let done_reg = cs.new_reg(&format!("{}_reg", &done_sig.name), done_sig.bits, None);
+                    // if (stage_in[i])
+                    {
+                        let mut new_conds = conds.clone();
+                        new_conds.push(varr_at(&stage_en, i).to_vexpr());
+                        cs.add_event(all_true(&new_conds), vec![vassign(&done_reg,
+                            vselect(
+                                varr_at(&is_enabled_now, i),
+                                &done_sig,
+                                vor(&done_reg, &done_sig)
+                            )
+                        )]);
+                    }
+                    let done = cs.new_assign(&format!("{}_done", &stmt.var.name), 1, None,
+                        vselect(varr_at(&is_enabled_now, i), &done_sig, &done_reg)
+                    );
+                    let write = cs.new_assign(&format!("{}_write", &stmt.var.name), 1, None,
+                        vselect(
+                            varr_at(&is_enabled_now, i),
+                            &done_sig,
+                            vand(&done_sig, vnot(&done_reg))
+                        )
+                    );
+                    stmt_done_write_map.insert(stmt.var.clone(), (done.to_vexpr(), write.to_vexpr()));
+                },
+                None => {
+                    let lat = get_latency_of_stmt(stmt, &cs).expect("Method without done should have fixed latency.");
+                    stmt_done_write_map.insert(stmt.var.clone(), (TRUE.to_vexpr(), varr_at(&is_enabled_now, i + lat).to_vexpr()));
+                }
+            }
+        }
+    }
 
     // stage, cond_wire (no delay), cond_reg (1cycle delay & remains false one cond_wire becomes false)
     let mut loop_conds: Option<(u32, VVar, VVar)> = None;
     // Generate datapath
     for i in min_stage..=max_stage {
-        let empty_vec = vec![];
-
-        for stmt in sched_stmts.get(&i).unwrap_or_else(|| &empty_vec) {
-            let lat = get_latency_of_stmt(stmt, &cs).expect("TODO: support variable latency");
-
+        for stmt in sched_stmts.get(&i).unwrap() {
             let mut new_conds = conds.clone();
             new_conds.push(varr_at(&stage_en, i).to_vexpr());
             let call_cond = all_true(&new_conds);
@@ -747,11 +826,13 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: u32, cs
                 loop_conds = Some((i, wire.clone(), var.clone()));
             }
 
-            let mut new_conds = conds.clone();
-            new_conds.push(varr_at(&stage_en, i + lat).to_vexpr());
-            let arrival_cond = all_true(&new_conds);
-
-            cs.add_event(arrival_cond, vec![vassign(var, wire)])
+            let (_, write) = stmt_done_write_map.get(&stmt.var).unwrap();
+            // if (write)
+            {
+                let mut new_conds = conds.clone();
+                new_conds.push(write.to_vexpr());
+                cs.add_event(all_true(&new_conds), vec![vassign(var, wire)]);
+            }
         }
     }
 
@@ -763,6 +844,29 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: u32, cs
         }
     };
 
+    // Generate is_stalling
+    for i in min_stage..=max_stage {
+        let stmts = sched_stmts.get(&i).unwrap();
+
+        if stmts.len() == 0 {
+            let waits = stmts.iter().map(|stmt| {
+                    let (done, _) = stmt_done_write_map.get(&stmt.var).unwrap();
+                    vnot(&done.to_vexpr())
+                }
+            ).collect::<Vec<_>>();
+
+            let waiting = any_true(&waits);
+            cs.assign(&varr_at(&is_waiting, i), vor(waiting, veq(&cnt, val((i % ii) as i32, uint(ii_nbits)))));
+        }
+    }
+
+    for i in min_stage..=max_stage {
+        let cond = any_true(&(i..max_stage).map(|i|
+            varr_at(&is_waiting, i).to_vexpr()
+        ).collect::<Vec<_>>());
+        cs.assign(&varr_at(&is_stalling, i), cond);
+    }
+
     // Generate pipeline state
     // if (STATE_en)
     {
@@ -773,11 +877,30 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: u32, cs
             val(0, uint(ii_nbits)),
             vplus(&cnt, val(1, uint(ii_nbits)))
         )));
-        // stage_en[0] <= loop_cond && (cnt == 0)
-        actions.push(vassign(varr_at(&stage_en, 0), vand(loop_cond, veq(&cnt, val(0, uint(ii_nbits))))));
-        for i in 1..=max_stage {
-            // stage_en[i] <= stage_en[i - 1];
-            actions.push(vassign(varr_at(&stage_en, i), varr_at(&stage_en, i - 1)));
+
+        // Pipeline enable shift register
+        // stage_en[0] <= is_stalling[min_stage] ?
+        //   stage_en[0] :
+        //   loop_cond && (cnt == 0);
+        actions.push(vassign(varr_at(&stage_en, min_stage),
+            vselect(
+                varr_at(&is_stalling, min_stage),
+                varr_at(&stage_en, 0),
+                vand(loop_cond, veq(&cnt, val(0, uint(ii_nbits))))
+            )
+        ));
+        for i in (min_stage+1)..=max_stage {
+            // stage_en[i] <= is_stalling[i] ?
+            //  stage_en[i] :
+            //  stage_en[i - 1] && !is_stalling[i - 1];
+            actions.push(vassign(
+                varr_at(&stage_en, i),
+                vselect(
+                    varr_at(&is_stalling, i),
+                    varr_at(&stage_en, i),
+                    vand(varr_at(&stage_en, i - 1), vnot(varr_at(&is_waiting, i - 1)))
+                )
+            ));
         }
         cs.add_event(all_true(&conds), actions);
 
@@ -786,16 +909,34 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: u32, cs
             conds.push(veq(&cnt, val(0, uint(ii_nbits))));
             // if (is_first) {
             conds.push((&is_first).to_vexpr());
+            // is_first <= false;
             cs.add_event(all_true(&conds), vec![vassign(&is_first, FALSE)]);
             // }
             conds.pop();
-            cs.add_event(all_true(&conds), vec![vassign(varr_at(&stage_is_first, 0), &is_first)]);
+            // stage_is_first[0] <= is_stalling[0] ?
+            //    stage_is_first[0] :
+            //    is_first;
+            cs.add_event(all_true(&conds), vec![vassign(
+                varr_at(&stage_is_first, 0),
+                vselect(
+                    varr_at(&is_stalling, min_stage),
+                    varr_at(&stage_is_first, 0),
+                    &is_first
+                )
+            )]);
             // }
             conds.pop();
             for i in 1..=max_stage {
+                // stage_is_first[i] <= is_stalling[i] ?
+                //    stage_is_first[i]
+                //    stage_is_first[i - 1]
                 cs.add_event(all_true(&conds), vec![vassign(
                     varr_at(&stage_is_first, i),
-                    varr_at(&stage_is_first, i - 1)
+                    vselect(
+                        varr_at(&is_stalling, min_stage),
+                        varr_at(&stage_is_first, i),
+                        varr_at(&stage_is_first, i - 1)
+                    )
                 )])
             }
         }
@@ -845,7 +986,7 @@ pub fn compile_sched_cdfg_ir(ir: &SchedCDFGIR) ->VerilogIR {
         name: name.clone(),
         localparams: cs.localparams,
         io_signals: cs.io,
-        // TODO: make names consistent with ones generated in gen_verilog_defenitions
+        // TODO: make the following names consistent with ones generated in gen_verilog_defenitions
         clk: vvar("clk", 1, None),
         rst_n: vvar("rst_n", 1, None),
         regs: cs.regs,
@@ -1503,7 +1644,8 @@ mod tests {
                         }),
                         ("put".to_string(), Method {
                             inputs: vec![var("val", int(32))],
-                            outputs: vec![],
+                            // TODO: support 0/more than 1 return values
+                            outputs: vec![var("dummy_ret", int(1))],
                             timing: Timing::Variable,
                             interface_signal: [Signal::Enable, Signal::Done].iter().cloned().collect(),
                         })
