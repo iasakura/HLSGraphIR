@@ -1477,4 +1477,80 @@ mod tests {
 
         run_test(&ir, false);
     }
+
+    #[test]
+    fn stream_add2() {
+        let n = &var("n", int(32));
+        let test0 = &var("test0", uint(1));
+
+        let a = &var("a", int(32));
+        let b = &var("b", int(32));
+        let write_token = &var("write_token", uint(1));
+        let sum = &var("sum", int(32));
+        let i = &var("i", int(32));
+        let i_next = &var("i_next", int(32));
+        let loop_cond = &var("loop_cond", int(1));
+
+        let ir = GenCDFGIR {
+            resource_types: [
+                ("Stream".to_string(), ResourceType {
+                    methods: [
+                        ("get".to_string(), Method {
+                            inputs: vec![],
+                            outputs: vec![var("val", int(32))],
+                            timing: Timing::Variable,
+                            interface_signal: [Signal::Enable, Signal::Done].iter().cloned().collect(),
+                        }),
+                        ("put".to_string(), Method {
+                            inputs: vec![var("val", int(32))],
+                            outputs: vec![],
+                            timing: Timing::Variable,
+                            interface_signal: [Signal::Enable, Signal::Done].iter().cloned().collect(),
+                        })
+                    ].iter().cloned().collect()
+                })
+            ].iter().cloned().collect(),
+            module: GenCDFGModule {
+                name: "stream_add2".to_string(),
+                start: label("INIT"),
+                params: vec![n.clone()],
+                ports: vec![
+                    ("stream1".to_string(), "Stream".to_string()),
+                    ("stream2".to_string(), "Stream".to_string()),
+                    ("output".to_string(), "Stream".to_string())
+                ],
+                resources: IndexMap::new(),
+                cdfg: vec![
+                    (label("INIT"), DFGBB {
+                        prevs: vec![],
+                        body: DFGBBBody::Seq(dfg!{
+                            test0 <- gt(n, val(0, int(32))), 0;
+                        }),
+                        exit: jc(test0, label("LOOP"), label("EXIT"))
+                    }),
+                    (label("LOOP"), DFGBB {
+                        prevs: vec![label("INIT")],
+                        body: DFGBBBody::Pipe(dfg!{
+                            i <- mu(val(1, int(32)), i_next), 0;
+                            i_next <- plus(i, val(1, int(32))), 0;
+                            a <- call!(stream1, get, [], []), 0;
+                            b <- call!(stream2, get, [], []), 0;
+                            sum <- plus(a, b), 1;
+                            write_token <- call!(output, put, [], []), 2;
+                            loop_cond <- lt(i, n), 0;
+                        }, 1),
+                        exit: jmp(label("EXIT")),
+                    }),
+                    (label("EXIT"), DFGBB {
+                        prevs: vec![label("INIT"), label("LOOP")],
+                        body: DFGBBBody::Seq(dfg!{ }),
+                        exit: ret(),
+                    })
+                ].into_iter().collect::<IndexMap<_, _>>(),
+                returns: vec![]
+            },
+        };
+
+        run_test(&ir, true);
+    }
 }
