@@ -214,7 +214,11 @@ pub struct ModuleInstantiation {
 
 // List of case e: var
 // Need to be pairwise mutually exclusive
-pub type ExMux = Vec<(VExpr, VExpr)>;
+#[derive(Debug)]
+pub struct ExMux {
+    pub cases: Vec<(VExpr, VExpr)>,
+    pub default: Option<VExpr>,
+}
 
 #[derive(Debug)]
 pub struct VerilogIR {
