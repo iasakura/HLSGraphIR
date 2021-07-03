@@ -875,7 +875,7 @@ fn gen_pipe_machine(l: &Label, dfg: &DFG<Sched>, prevs: &Vec<Label>, ii: u32, cs
     }
 
     // Generate pipeline state
-    // if (STATE_en)x0
+    // if (STATE_en)
     {
         let mut actions = vec![];
         // cnt <= cnt == ii ? 0 cnt + 1;
