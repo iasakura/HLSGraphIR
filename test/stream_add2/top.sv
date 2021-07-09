@@ -116,24 +116,24 @@ module stream_sink_sim(
     logic [31:0] mem[0:1023];
     logic [2:0] state;
     logic [31:0] idx;
-    logic start_reg;
+    logic start_reg[0:1];
 
     always @(posedge clk) begin
+        start_reg[0] <= start;
+        start_reg[1] <= start_reg[0];
+
+
         if (!reset_n) begin
             idx <= 32'd0;
             state <= ST_RUN;
-        end
-
-        start_reg <= start;
-
-        if (reset_n && start && !start_reg) begin
+            ready <= 1'd0;
+            finish <= 1'd0;
+        end else if (reset_n && start_reg[0] && !start_reg[1]) begin
             state <= ST_RUN;
             idx <= 32'd0;
             ready <= 1'd1;
             finish <= 1'd0;
-        end
-
-        if (reset_n && state == ST_RUN) begin
+        end else if (reset_n && state == ST_RUN) begin
             ready <= 1'd1;
             if (valid) begin
                 mem[idx] <= val;
@@ -145,9 +145,7 @@ module stream_sink_sim(
                     state <= ST_RUN;
                 end
             end
-        end
-
-        if (reset_n && state <= ST_FIN) begin
+        end else if (reset_n && state == ST_FIN) begin
             finish <= 1'd1;
         end
     end
