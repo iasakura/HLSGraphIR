@@ -66,11 +66,11 @@ void test(int n, const std::string &name) {
             printf("loop_en = %02x ", dut->collatz_ii1__DOT__LOOP_en);
             printf("loop_done = %02x ", dut->collatz_ii1__DOT__LOOP_done);
             // // printf("init_done = %02x ", dut->collatz__DOT__st_init_done);
-            printf("en[] = %02x, %02x, %02x ", dut->collatz_ii1__DOT__LOOP_stage_en[0], dut->collatz_ii1__DOT__LOOP_stage_en[1], dut->collatz_ii1__DOT__LOOP_stage_en[2]);
+            printf("en[] = %02x, %02x, %02x ", dut->collatz_ii1__DOT__LOOP_stage_en_0, dut->collatz_ii1__DOT__LOOP_stage_en_1, dut->collatz_ii1__DOT__LOOP_stage_en_2);
             // printf("en1 = %02x ", dut->collatz__DOT__LOOP_stage_en[1]);
             // printf("cond = %02x ", dut->collatz__DOT__LOOP_loop_cond);
             printf("is_first = %02x ", dut->collatz_ii1__DOT__LOOP_is_first);
-            printf("is_first[] = %02x, %02x, %02x ", dut->collatz_ii1__DOT__LOOP_stage_is_first[0], dut->collatz_ii1__DOT__LOOP_stage_is_first[1], dut->collatz_ii1__DOT__LOOP_stage_is_first[2]);
+            printf("is_first[] = %02x, %02x, %02x ", dut->collatz_ii1__DOT__LOOP_stage_is_first_0, dut->collatz_ii1__DOT__LOOP_stage_is_first_1, dut->collatz_ii1__DOT__LOOP_stage_is_first_2);
             // printf("cnt = %02x ", dut->collatz__DOT__LOOP_cnt);
             printf("cur0 = %02x ", dut->collatz_ii1__DOT__cur0);
             printf("loop_cur0 = %02x ", dut->collatz_ii1__DOT__loop_cur0);

@@ -56,8 +56,8 @@ void test(int n) {
             printf("loop_en = %02x ", dut->collatz__DOT__LOOP_en);
             printf("loop_done = %02x ", dut->collatz__DOT__LOOP_done);
             // printf("init_done = %02x ", dut->collatz__DOT__st_init_done);
-            printf("en0 = %02x ", dut->collatz__DOT__LOOP_stage_en[0]);
-            printf("en1 = %02x ", dut->collatz__DOT__LOOP_stage_en[1]);
+            printf("en0 = %02x ", dut->collatz__DOT__LOOP_stage_en_0);
+            printf("en1 = %02x ", dut->collatz__DOT__LOOP_stage_en_1);
             printf("cond = %02x ", dut->collatz__DOT__LOOP_loop_cond);
             printf("is_first = %02x ", dut->collatz__DOT__LOOP_is_first);
             printf("cnt = %02x ", dut->collatz__DOT__LOOP_cnt);
